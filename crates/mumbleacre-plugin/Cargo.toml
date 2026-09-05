@@ -1,0 +1,26 @@
+[package]
+name = "mumbleacre-plugin"
+description = "Mumble client plugin for MumbleACRE positional audio and radio effects"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "mumbleacre_plugin"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+arc-swap.workspace = true
+hound.workspace = true
+mumbleacre-acre.workspace = true
+mumbleacre-logging.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi"] }

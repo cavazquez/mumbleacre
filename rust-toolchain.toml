@@ -1,0 +1,4 @@
+# Alineado con CI (stable). `Duration::from_mins` es estable desde 1.91.0.
+[toolchain]
+channel = "1.91.0"
+components = ["rustfmt", "clippy"]

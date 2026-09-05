@@ -1,0 +1,54 @@
+# ACRE2 v2.14.0.1064 private RPC corpus.
+# Source: ACRE2Core/Engine.cpp and its registered handlers.
+# Lines are intentionally raw ASCII pipe payloads; a trailing NUL is optional.
+
+ping:
+pong:12.500000,
+getPluginVersion:
+handleGetPluginVersion:2.14.0.1064
+getClientID:2:1234,
+handleGetClientID:42,2:1234,
+updateSelf:10,20,30,0,1,0,7,
+setVoiceCurveModel:2,0.750000,
+setSelectableVoiceCurve:0.750000,
+setSetting:globalVolume,0.80,
+setTs3ChannelDetails:channel,uid,password,
+getVOIPServerName:
+handleGetVOIPServerName:Mumble Test Server
+getVOIPChannelName:
+handleGetVOIPChannelName:ACRE Test
+getVOIPChannelUID:
+handleGetVOIPChannelUID:abc123
+getVOIPServerUID:
+handleGetVOIPServerUID:server-uid
+localMute:1,
+setMuted:42,1,43,0,
+startRadioSpeaking:ACRE_PRC152,
+stopRadioSpeaking:
+startIntercomSpeaking:
+stopIntercomSpeaking:
+startGodModeSpeaking:
+stopGodModeSpeaking:
+startZeusSpeaking:
+stopZeusSpeaking:
+setPTTKeys:radio,1,0,0,0,
+loadSound:sound-id,0,1,QUJD,
+handleLoadedSound:sound-id,1
+playLoadedSound:sound-id,1,2,3,0,1,0,0.5,1,
+handleSoundError:sound-id,
+setSoundSystemMasterOverride:1,
+ext_reset:42,
+ext_remoteStartSpeaking:99,7,2:remote,1,ACRE_PRC152,0.750000,
+ext_remoteStopSpeaking:99,
+ext_handleGetClientID:99,2:remote,
+localStartSpeaking:42,7,1,ACRE_PRC152,
+localStopSpeaking:42,1,ACRE_PRC152,
+remoteStartSpeaking:99,7,2:remote,1,ACRE_PRC152,
+remoteStopSpeaking:99,2:remote,1,ACRE_PRC152,
+updateSpeakingData:d,42,1,0.75,100,300,200,0,1,0,
+updateSpeakingData:i,42,0,1,100,300,200,0,1,0,
+updateSpeakingData:z,42,0,1,100,300,200,0,1,0,
+updateSpeakingData:r,42,0,2,0.9,1,2,0,10,30,20,0.5,0.8,3,1,40,60,50,
+updateSpeakingData:m,42,0,
+updateSpeakingData:s,42,0,0.6,
+updateSpeakingData:g,42,0,0.9,

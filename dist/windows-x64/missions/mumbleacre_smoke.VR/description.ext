@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: GPL-3.0
+// Fixture Eden / Play in Multiplayer — ACRE2 + Mumble candidate smoke.
+
+onLoadName = "MumbleACRE ACRE Eden Smoke";
+onLoadMission = "Fixture QA: dos playables con PRC-152 y PRC-117F ACRE.";
+author = "MumbleACRE";
+briefingName = "MumbleACRE ACRE Eden Smoke";
+
+class Header {
+    gameType = Coop;
+    minPlayers = 1;
+    maxPlayers = 2;
+};
+
+respawn = 3;
+respawnDelay = 3;
+disabledAI = 1;
