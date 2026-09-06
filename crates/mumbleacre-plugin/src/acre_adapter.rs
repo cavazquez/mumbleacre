@@ -51,6 +51,12 @@ pub(crate) enum AcreAdapterEvent {
     QueueOverflow,
     LocalTransmissionStarted(Transmission),
     LocalTransmissionStopped(Transmission),
+    SoundSystemOverrideChanged(bool),
+    LocalMuteChanged(bool),
+    UserMuteChanged {
+        voice_client_id: u32,
+        muted: bool,
+    },
     ResetRequested,
     SoundPlaybackReady {
         generation: u64,
@@ -532,6 +538,33 @@ fn dispatch_actions(
                     AcreAdapterEvent::LocalTransmissionStopped(transmission),
                 );
             }
+            AcreAction::SoundSystemOverrideChanged(enabled) => {
+                push_event(
+                    &shared.events,
+                    event_log,
+                    AcreAdapterEvent::SoundSystemOverrideChanged(enabled),
+                );
+            }
+            AcreAction::LocalMuteChanged(muted) => {
+                push_event(
+                    &shared.events,
+                    event_log,
+                    AcreAdapterEvent::LocalMuteChanged(muted),
+                );
+            }
+            AcreAction::UserMuteChanged {
+                voice_client_id,
+                muted,
+            } => {
+                push_event(
+                    &shared.events,
+                    event_log,
+                    AcreAdapterEvent::UserMuteChanged {
+                        voice_client_id,
+                        muted,
+                    },
+                );
+            }
             AcreAction::ListenerUpdated(state) => {
                 record_listener_state(state, &shared.listener_state);
             }
@@ -894,6 +927,22 @@ fn push_event(
             LogLevel::Info,
             "acre_local_transmission_stopped",
             format!("speaking_kind={:?}", transmission.speaking_kind()),
+        ),
+        AcreAdapterEvent::SoundSystemOverrideChanged(enabled) => (
+            LogLevel::Info,
+            "acre_sound_system_override",
+            format!("enabled={enabled}"),
+        ),
+        AcreAdapterEvent::LocalMuteChanged(muted) => {
+            (LogLevel::Info, "acre_local_mute", format!("muted={muted}"))
+        }
+        AcreAdapterEvent::UserMuteChanged {
+            voice_client_id,
+            muted,
+        } => (
+            LogLevel::Debug,
+            "acre_user_mute",
+            format!("voice_client_id={voice_client_id} muted={muted}"),
         ),
         AcreAdapterEvent::ResetRequested => (
             LogLevel::Info,

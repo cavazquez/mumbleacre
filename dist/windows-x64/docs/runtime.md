@@ -26,10 +26,11 @@ no la reabra. Un estado nuevo puede reabrirla legítimamente.
 
 Mumble aporta el ID de sesión autoritativo y la lista de miembros del canal;
 un payload no puede escoger otro ID de voz. Cambiar servidor/canal elimina el
-estado anterior. El identificador `MUMBLEACRE_MISSION` es un requisito operativo
-compartido, no una credencial ni una identidad de misión autenticada por Arma.
-El protocolo asume miembros confiables del canal; no autoriza God/Zeus por un
-campo enviado por un peer.
+estado anterior. El scope por defecto es `mumble-channel` y sólo se aceptan
+mensajes de miembros del canal Mumble actual. `MUMBLEACRE_MISSION` es un override
+opcional compartido, no una credencial ni una identidad de misión autenticada por
+Arma. El protocolo asume miembros confiables del canal; no autoriza God/Zeus por
+un campo enviado por un peer.
 
 Una transmisión remota vence tras 250 ms sin estado nuevo, emite STOP y pierde
 el permiso de audio. La callback verifica ese mismo plazo con reloj monotónico
@@ -46,6 +47,12 @@ micrófono forzado de ACRE; esto permite volver a PTT/VAD sin depender sólo de
 un callback de cambio de habla. El inicio puede recortarse: no hay pre-roll de
 voz aprobado todavía. `sendData` exitoso no confirma recepción, por eso el
 límite del servidor y las mediciones de QA siguen siendo requisitos.
+
+Los RPC `setSoundSystemMasterOverride` y `localMute` pasan por el control del
+hilo principal: el primero silencia el render de voz de ACRE y el segundo
+desactiva el micrófono local. `setMuted` solicita el mute local de Mumble para
+el usuario indicado. Ninguna de esas operaciones se ejecuta desde el worker de
+pipes ni el callback de audio.
 
 Audio: 128 slots DSP preasignados, acceso exclusivo con atómico sin espera,
 snapshots inmutables y búsqueda por sesión. Colisiones de slot reinician DSP;

@@ -1,12 +1,16 @@
 # MumbleACRE
 
+La versión de distribución se toma de `Cargo.toml`. Cada corrección entregada
+incrementa el último dígito de la versión, para que Mumble pueda identificar la
+actualización al reinstalar el plugin.
+
 Backend no oficial de **ACRE2 para Mumble en Arma 3**, Windows x64.
 ACRE controla radios, teclas, alcance, intercom e interfaces; Mumble transporta
 la voz. No necesita TFAR, un bridge ni una extensión Arma propia.
 
 **Estado: candidato para pruebas.** El runtime está conectado y se verifica
 con pruebas automatizadas y compilación Windows. Falta validar una partida
-con dos clientes Windows y Arma; no se declara paridad completa con TeamSpeak.
+con dos clientes Windows y Arma.
 
 ## Instalar y usar
 
@@ -14,8 +18,8 @@ con dos clientes Windows y Arma; no se declara paridad completa con TeamSpeak.
    **2.14.0.1064** + CBA_A3 en Arma. Otras versiones de ACRE requieren revisar
    su protocolo privado antes de declararlas compatibles.
 2. Instalar `dist/windows-x64/MumbleACRE.mumble_plugin` desde las opciones de
-   plugins de Mumble. Deshabilitar el plugin ACRE de TeamSpeak: sólo un backend
-   puede poseer los pipes de ACRE. Retirar/deshabilitar el plugin RMTFAR anterior.
+   plugins de Mumble. Cerrar cualquier otro cliente que esté usando ACRE antes
+   de abrir Mumble: los pipes de ACRE sólo pueden tener un propietario.
 3. En el servidor Mumble configurar y reiniciar:
 
    ```ini
@@ -25,15 +29,17 @@ con dos clientes Windows y Arma; no se declara paridad completa con TeamSpeak.
 
    Estos límites se comparten entre los plugins de cada cliente. El valor por
    defecto no alcanza para este backend. Ver [configuración oficial de Mumble](https://github.com/mumble-voip/mumble/blob/master/auxiliary_files/mumble-server.ini).
-4. Cerrar Mumble y abrirlo con el mismo identificador de partida en todos los
-   clientes. Usar uno nuevo en cada misión:
+4. Cerrar Mumble y abrirlo normalmente: el plugin usa el canal Mumble activo
+   como límite de la partida, así que no requiere un identificador de misión:
 
    ```powershell
-   .\start-mumble.ps1 -Mission "operacion-20260904-01"
+   .\scripts\start-mumble.ps1
    ```
 
-   Alternativa: definir `MUMBLEACRE_MISSION` antes de ejecutar Mumble.
-   Habilitar MumbleACRE en la lista de plugins si todavía no está habilitado.
+   `MUMBLEACRE_MISSION` queda disponible como override opcional para aislar un
+   grupo adicionalmente; si se usa, debe tener el mismo valor en todos los
+   clientes. Habilitar MumbleACRE en la lista de plugins si todavía no está
+   habilitado.
 5. Entrar todos al mismo canal Mumble **administrado y exclusivo de esa
    partida**, con el mismo plugin. El servidor dedicado de Arma sólo necesita
    CBA + ACRE y los mods de la misión. El backend se instala en cada cliente.
@@ -86,9 +92,10 @@ usar una copia local. CI también ejecuta las pruebas nativas Windows.
 
 Diagnóstico del pipe: `%LOCALAPPDATA%\MumbleACRE\logs\plugin.log`, con rotación.
 El chat/log Mumble informa arranque, conexión ACRE, pérdida de salud y colas
-saturadas. Si no conecta: revisar la variable de misión, versión de ACRE,
-plugin TeamSpeak deshabilitado y el canal. Si se corta la voz: revisar primero
-los límites del servidor y luego guardar logs y RPT para la prueba de QA.
+saturadas. Si no conecta: revisar que MumbleACRE esté habilitado, la versión de
+ACRE, que ningún otro cliente posea el pipe y el canal Mumble. Si se corta la
+voz: revisar primero los límites del servidor y luego guardar logs y RPT para
+la prueba de QA.
 
 [Arquitectura y límites](docs/runtime.md) · [Misión](docs/acre-mission-integration.md)
 · [QA pendiente](docs/qa.md) · [Proveniencia y GPL-3.0](NOTICE.md)

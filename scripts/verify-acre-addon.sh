@@ -100,7 +100,7 @@ else
     for dependency in cba_main acre_main acre_api acre_sys_prc152 acre_sys_prc117f mumbleacre_acre; do
         require_text "$MISSION/mission.sqm" "\"$dependency\"" "Fixture declara $dependency"
     done
-    playable_count=$(rg -c 'isPlayable=1' "$MISSION/mission.sqm" | awk -F: '{total += $NF} END {print total + 0}')
+    playable_count=$(rg -c 'is(Player|Playable)=1' "$MISSION/mission.sqm" | awk -F: '{total += $NF} END {print total + 0}')
     if [[ "$playable_count" -eq 2 ]]; then
         ok "Fixture declara exactamente dos slots playables"
     else

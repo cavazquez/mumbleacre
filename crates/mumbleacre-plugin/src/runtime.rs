@@ -22,6 +22,12 @@ pub enum Input {
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
 static OVERFLOW: AtomicBool = AtomicBool::new(false);
 static RUNTIME: Mutex<Option<Runtime>> = Mutex::new(None);
+
+// Peer messages are additionally accepted only from users in the active
+// Mumble channel. An explicit value remains available for deployments that
+// want to isolate a group beyond that channel boundary.
+const DEFAULT_SCOPE: &str = "mumble-channel";
+
 struct Runtime {
     adapter: AcreAdapterRuntime,
     timer: Option<Timer>,
@@ -38,6 +44,8 @@ struct Runtime {
     last_send: Instant,
     dirty: bool,
     mic: bool,
+    sound_system_override: bool,
+    locally_muted: bool,
 }
 pub fn enqueue(input: Input) {
     let mut queue = INPUT
@@ -50,10 +58,7 @@ pub fn enqueue(input: Input) {
     }
 }
 pub fn start() -> Result<(), String> {
-    let scope = std::env::var("MUMBLEACRE_MISSION").map_err(|_| {
-        "Definí MUMBLEACRE_MISSION con el mismo identificador de misión en todos los clientes"
-            .to_owned()
-    })?;
+    let scope = std::env::var("MUMBLEACRE_MISSION").unwrap_or_else(|_| DEFAULT_SCOPE.to_owned());
     PeerHeader::new(&scope, 1, 1).map_err(|e| e.to_string())?;
     let mut runtime = RUNTIME
         .lock()
@@ -101,10 +106,12 @@ pub fn start() -> Result<(), String> {
         last_send: Instant::now(),
         dirty: true,
         mic: false,
+        sound_system_override: false,
+        locally_muted: false,
     });
     drop(runtime);
     ffi::log(
-        "MumbleACRE: esperando ACRE2; servidor requiere pluginmessagelimit=20 y pluginmessageburst=40",
+        "MumbleACRE: esperando ACRE2; los pares se limitan al canal Mumble activo; servidor requiere pluginmessagelimit=20 y pluginmessageburst=40",
     );
     Ok(())
 }
@@ -164,11 +171,25 @@ impl Runtime {
         self.generation = self.generation.saturating_add(1);
         self.sequence = 0;
         self.dirty = true;
+        self.sound_system_override = false;
+        self.locally_muted = false;
+        audio::set_sound_system_override(false);
         if ffi::microphone(false) {
             self.mic = false;
         }
         let _ = audio::get().decisions.reset();
         audio::get().peers.store(Arc::new(Default::default()));
+    }
+
+    fn voice_is_suppressed(&self) -> bool {
+        self.sound_system_override || self.locally_muted
+    }
+
+    fn suppress_local_microphone(&mut self) {
+        crate::capture::close();
+        if ffi::microphone(false) {
+            self.mic = false;
+        }
     }
     fn ptt_actions(&mut self, actions: Vec<PttAction>) {
         for action in actions {
@@ -231,7 +252,10 @@ impl Runtime {
     }
     fn tick(&mut self) {
         let now = Instant::now();
-        if self.mic && !self.ptt.microphone_overwrite_active() && ffi::microphone(false) {
+        if self.mic
+            && (self.voice_is_suppressed() || !self.ptt.microphone_overwrite_active())
+            && ffi::microphone(false)
+        {
             self.mic = false;
         }
         let context = ffi::context();
@@ -340,6 +364,29 @@ impl Runtime {
                     let actions = self.ptt.acre_stopped(&t);
                     self.ptt_actions(actions);
                 }
+                AcreAdapterEvent::SoundSystemOverrideChanged(enabled) => {
+                    self.sound_system_override = enabled;
+                    audio::set_sound_system_override(enabled);
+                    if enabled {
+                        self.suppress_local_microphone();
+                    }
+                    self.dirty = true;
+                }
+                AcreAdapterEvent::LocalMuteChanged(muted) => {
+                    self.locally_muted = muted;
+                    if muted {
+                        self.suppress_local_microphone();
+                    }
+                    self.dirty = true;
+                }
+                AcreAdapterEvent::UserMuteChanged {
+                    voice_client_id,
+                    muted,
+                } => {
+                    if let Some(context) = self.context.as_ref() {
+                        let _ = ffi::request_local_mute(context, voice_client_id, muted);
+                    }
+                }
                 AcreAdapterEvent::SoundPlaybackReady {
                     generation,
                     id,
@@ -380,7 +427,7 @@ impl Runtime {
                 }
             }
         }
-        self.native_talking = crate::capture::native();
+        self.native_talking = !self.voice_is_suppressed() && crate::capture::native();
         if let Some(direct) = self.direct.clone() {
             let actions = if self.native_talking {
                 self.ptt.direct_started(direct).unwrap_or_default()
@@ -406,6 +453,11 @@ impl Runtime {
             return;
         };
         if !self.connected {
+            return;
+        }
+        if self.voice_is_suppressed() {
+            self.suppress_local_microphone();
+            self.dirty = true;
             return;
         }
         self.sequence = self.sequence.saturating_add(1);

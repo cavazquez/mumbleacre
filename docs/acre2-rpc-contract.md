@@ -25,15 +25,22 @@ compatibilidad rompe el gate.
 |---|---|
 | Salud/identidad | `ping`, versión, `getClientID`, reset; identidad Mumble sincronizada. |
 | Estado local | Pose, idioma y curva; `setSetting` se valida sin cambiar Mumble. |
+| Control de cliente | `setSoundSystemMasterOverride`, `localMute`, `setMuted` y `setPTTKeys`; aplica silencios de ACRE sin romper el pipe. |
 | VOIP | Nombre/UID de servidor y canal; `setTs3ChannelDetails` es no-op validado. |
 | PTT | Radio/intercom y voz nativa conectados; God/Zeus sólo codec, no envío remoto. |
 | Pares | Estado completo Mumble convertido a `remoteStartSpeaking`/`remoteStopSpeaking`. |
 | Audio | `updateSpeakingData` tipado, publicación inmutable y DSP ACRE. |
 | Sonidos | `loadSound`/`playLoadedSound`, sólo locales centrados; otros reciben error. |
 
-`localMute`, `setMuted` y `setSoundSystemMasterOverride` no tienen handler de
-runtime; el inventario de nombres no implica soporte. Revisar su uso en las
-escenas reales de QA antes de afirmar compatibilidad completa.
+En `v2.14.0.1064`, `getClientID` llega desde Arma con dos parámetros:
+`netId` y `playerUID`. MumbleACRE conserva el `netId` para asociar el estado
+de voz y devuelve el ID de usuario de Mumble junto con ese mismo `netId`.
+
+`setSoundSystemMasterOverride` silencia el audio de voz mientras ACRE mantiene
+el override (por ejemplo, durante briefing). `localMute` bloquea el micrófono
+local y `setMuted` usa el mute local por usuario de Mumble. `setPTTKeys` se
+valida como no-op: el handler original de ACRE2 también tiene su efecto de
+teclas deshabilitado y el PTT se controla mediante los RPC de inicio/parada.
 
 Un procedimiento desconocido se rechaza; no se intenta una compatibilidad
 silenciosa con otro release de ACRE.

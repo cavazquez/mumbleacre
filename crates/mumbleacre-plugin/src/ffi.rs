@@ -198,6 +198,7 @@ struct Api {
     server_hash: MumbleFnGetServerHash,
     send: MumbleFnSendData,
     mic: MumbleFnRequestMicrophoneActivationOverwrite,
+    mute: MumbleFnRequestLocalMute,
     log: MumbleFnLog,
     play: MumbleFnPlaySample,
 }
@@ -305,6 +306,13 @@ pub fn microphone(active: bool) -> bool {
     success
 }
 
+/// Applies ACRE's per-user mute request through Mumble's normal local-mute
+/// mechanism. This is deliberately called by the main-thread runtime, never
+/// by the named-pipe worker.
+pub fn request_local_mute(context: &Context, user_id: u32, muted: bool) -> bool {
+    api().is_some_and(|a| unsafe { (a.mute)(a.id, context.connection, user_id, muted) == 0 })
+}
+
 pub fn log(message: &str) {
     if let (Some(a), Ok(s)) = (api(), CString::new(message)) {
         unsafe {
@@ -341,6 +349,7 @@ pub unsafe extern "C" fn mumble_registerAPIFunctions(ptr: *const c_void) {
         server_hash: a.get_server_hash,
         send: a.send_data,
         mic: a.request_microphone_activation_overwrite,
+        mute: a.request_local_mute,
         log: a.log,
         play: a.play_sample,
     });
@@ -392,11 +401,11 @@ pub extern "C" fn mumble_getName() -> MumbleStringWrapper {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn mumble_getAuthor() -> MumbleStringWrapper {
-    string(c"MumbleACRE and RMTFAR contributors")
+    string(c"MumbleACRE contributors")
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn mumble_getDescription() -> MumbleStringWrapper {
-    string(c"Unofficial ACRE2 2.14.0.1064 backend for Mumble; managed mission channel required")
+    string(c"Unofficial ACRE2 2.14.0.1064 backend for Mumble; active Mumble channel required")
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn mumble_getAPIVersion() -> mumble_version_t {
@@ -406,13 +415,26 @@ pub extern "C" fn mumble_getAPIVersion() -> mumble_version_t {
         patch: 0,
     }
 }
+
+fn plugin_version() -> mumble_version_t {
+    // Keep the Mumble-facing metadata tied to the Cargo package version, so a
+    // patch release cannot accidentally be distributed as the prior build.
+    mumble_version_t {
+        major: env!("CARGO_PKG_VERSION_MAJOR")
+            .parse()
+            .expect("Cargo package major version must be numeric"),
+        minor: env!("CARGO_PKG_VERSION_MINOR")
+            .parse()
+            .expect("Cargo package minor version must be numeric"),
+        patch: env!("CARGO_PKG_VERSION_PATCH")
+            .parse()
+            .expect("Cargo package patch version must be numeric"),
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn mumble_getVersion() -> mumble_version_t {
-    mumble_version_t {
-        major: 0,
-        minor: 1,
-        patch: 0,
-    }
+    plugin_version()
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn mumble_getFeatures() -> u32 {
@@ -507,6 +529,24 @@ mod tests {
         assert_eq!(std::mem::offset_of!(MumbleAPI, play_sample), 37 * p);
         assert_eq!(std::mem::size_of::<MumbleAPI>(), 38 * p);
     }
+
+    #[test]
+    fn mumble_version_matches_the_cargo_package_version() {
+        let version = mumble_getVersion();
+        assert_eq!(
+            version.major,
+            env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>().unwrap()
+        );
+        assert_eq!(
+            version.minor,
+            env!("CARGO_PKG_VERSION_MINOR").parse::<u32>().unwrap()
+        );
+        assert_eq!(
+            version.patch,
+            env!("CARGO_PKG_VERSION_PATCH").parse::<u32>().unwrap()
+        );
+    }
+
     #[test]
     fn speech_without_runtime_is_silent_and_notifications_untouched() {
         let mut pcm = [0.8; 8];

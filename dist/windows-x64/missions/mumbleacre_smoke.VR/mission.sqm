@@ -32,6 +32,89 @@ addons[]=
     "acre_sys_prc117f",
     "mumbleacre_acre"
 };
+class AddonsMetaData
+{
+    class List
+    {
+        items=9;
+        class Item0
+        {
+            className="A3_Characters_F";
+            name="Arma 3 Alpha - Characters and Clothing";
+            author="Bohemia Interactive";
+            url="https://www.arma3.com";
+        };
+        class Item1
+        {
+            className="A3_Weapons_F";
+            name="Arma 3 Alpha - Weapons and Accessories";
+            author="Bohemia Interactive";
+            url="https://www.arma3.com";
+        };
+        class Item2
+        {
+            className="A3_Ui_F";
+            name="Arma 3 - User Interface";
+            author="Bohemia Interactive";
+            url="https://www.arma3.com";
+        };
+        class Item3
+        {
+            className="cba_main";
+            name="Community Base Addons";
+            author="CBA Team";
+            url="https://github.com/CBATeam/CBA_A3";
+        };
+        class Item4
+        {
+            className="acre_main";
+            name="ACRE2";
+            author="IDI Systems";
+            url="https://acre2.idi-systems.com/";
+        };
+        class Item5
+        {
+            className="acre_api";
+            name="ACRE2 API";
+            author="IDI Systems";
+            url="https://acre2.idi-systems.com/";
+        };
+        class Item6
+        {
+            className="acre_sys_prc152";
+            name="ACRE2 PRC-152";
+            author="IDI Systems";
+            url="https://acre2.idi-systems.com/";
+        };
+        class Item7
+        {
+            className="acre_sys_prc117f";
+            name="ACRE2 PRC-117F";
+            author="IDI Systems";
+            url="https://acre2.idi-systems.com/";
+        };
+        class Item8
+        {
+            className="mumbleacre_acre";
+            name="MumbleACRE ACRE mission integration";
+            author="MumbleACRE Team";
+            url="https://github.com/cavazquez/mumbleacre";
+        };
+    };
+};
+randomSeed=20260906;
+class ScenarioData
+{
+    author="MumbleACRE";
+    overviewText="Fixture QA ACRE: 2 playables WEST con PRC-152 y PRC-117F.";
+    disabledAI=1;
+    class Header
+    {
+        gameType="Coop";
+        minPlayers=1;
+        maxPlayers=2;
+    };
+};
 class Mission
 {
     class Intel
@@ -71,7 +154,7 @@ class Mission
                     flags=7;
                     class Attributes
                     {
-                        isPlayable=1;
+                        isPlayer=1;
                         description="MumbleACRE ACRE Host / Player 1";
                         name="mumbleacre_acre_p1";
                     };

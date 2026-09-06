@@ -5,9 +5,9 @@
 //! sample for a Mumble plugin callback to pass to `playSample`. Mumble permits
 //! API calls from worker threads but synchronizes them with its main thread, so
 //! this worker deliberately never calls the API. Neither operation occurs in
-//! `mumble_onAudioSourceFetched`. API v1.0 has no positional sample interface,
-//! so non-centred or world playback is rejected instead of being silently
-//! rendered with the wrong spatial meaning.
+//! `mumble_onAudioSourceFetched`. API v1.0 has no positional sample interface:
+//! local device sounds play centred, while world playback is rejected rather
+//! than being silently rendered with the wrong spatial meaning.
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -301,7 +301,7 @@ fn prepare_playback_file(
         return AcreSoundWorkerResult::PlaybackFailed {
             generation,
             id,
-            reason: "Mumble API v1.0 only supports centred local ACRE sounds".to_owned(),
+            reason: "Mumble API v1.0 cannot spatialize world ACRE sounds".to_owned(),
         };
     }
     let Some(sound) = cache.get(&id) else {
@@ -358,15 +358,7 @@ fn prepare_playback_file(
 }
 
 fn is_supported_local_sample(request: &AcreSoundPlayback) -> bool {
-    let position = request.position();
-    let direction = request.direction();
     !request.is_world()
-        && position.x == 0.0
-        && position.z == 0.0
-        && position.y == 0.0
-        && direction.x == 0.0
-        && direction.z == 0.0
-        && direction.y == 0.0
 }
 
 struct ParsedWav {
@@ -627,23 +619,26 @@ mod tests {
     }
 
     #[test]
-    fn rejects_world_or_positioned_requests_instead_of_losing_spatial_meaning() {
+    fn centres_local_requests_and_rejects_world_requests() {
         let centred = parse_play_loaded_sound(
             &AcreMessage::parse(b"playLoadedSound:ACRE_Click,0,0,0,0,0,0,1,0,").unwrap(),
         )
         .unwrap();
         assert!(is_supported_local_sample(&centred));
 
+        // ACRE's handheld radios pass a direction and can apply a small
+        // left/right ear offset. Mumble v1.0 cannot preserve that geometry,
+        // but the user-facing beep/click must still be heard.
+        let internal_radio = parse_play_loaded_sound(
+            &AcreMessage::parse(b"playLoadedSound:ACRE_Click,2,0,0,0,1,0,1,0,").unwrap(),
+        )
+        .unwrap();
+        assert!(is_supported_local_sample(&internal_radio));
+
         let world = parse_play_loaded_sound(
             &AcreMessage::parse(b"playLoadedSound:ACRE_Click,0,0,0,0,0,0,1,1,").unwrap(),
         )
         .unwrap();
         assert!(!is_supported_local_sample(&world));
-
-        let positioned = parse_play_loaded_sound(
-            &AcreMessage::parse(b"playLoadedSound:ACRE_Click,1,0,0,0,0,0,1,0,").unwrap(),
-        )
-        .unwrap();
-        assert!(!is_supported_local_sample(&positioned));
     }
 }

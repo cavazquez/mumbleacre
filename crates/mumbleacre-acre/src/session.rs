@@ -169,6 +169,17 @@ pub enum AcreAction {
     SendToArma(AcreMessage),
     LocalTransmissionStarted(Transmission),
     LocalTransmissionStopped(Transmission),
+    /// ACRE temporarily suppresses every voice renderer while a client is in
+    /// briefing or the mission is otherwise not ready for positional audio.
+    SoundSystemOverrideChanged(bool),
+    /// ACRE temporarily disables the local microphone, for example while the
+    /// player is dead or has no usable headset.
+    LocalMuteChanged(bool),
+    /// ACRE requests that one remote Mumble source is locally muted/unmuted.
+    UserMuteChanged {
+        voice_client_id: u32,
+        muted: bool,
+    },
     ListenerUpdated(AcreListenerState),
     SpeakingUpdated(AcreSpeakerAudioUpdate),
     SoundLoaded(AcreLoadedSound),
@@ -312,6 +323,10 @@ impl AcreSession {
             "setSelectableVoiceCurve" => self.set_selectable_voice_curve(message),
             "setVoiceCurveModel" => self.set_voice_curve_model(message),
             "setSetting" => Self::validate_setting(message),
+            "setSoundSystemMasterOverride" => Self::set_sound_system_master_override(message),
+            "localMute" => Self::local_mute(message),
+            "setMuted" => Self::set_muted(message),
+            "setPTTKeys" => Self::validate_ptt_keys(message),
             "setTs3ChannelDetails" => {
                 expect_arity(message, 3)?;
                 Ok(Vec::new())
@@ -407,7 +422,11 @@ impl AcreSession {
         &mut self,
         message: &AcreMessage,
     ) -> Result<Vec<AcreAction>, AcreSessionError> {
-        expect_arity(message, 1)?;
+        // ACRE2's getClientIdLoop sends the local Arma netId followed by the
+        // player's UID. The Mumble side needs the netId to associate outgoing
+        // peer state with ACRE; the UID remains owned by Arma and is not used
+        // by the voice backend.
+        expect_arity(message, 2)?;
         let net_id = message.parameters()[0].clone();
         let voice_client_id = self
             .local_voice_client_id
@@ -492,6 +511,70 @@ impl AcreSession {
             return Err(AcreSessionError::EmptySettingName);
         }
         let _ = parse_finite_float(message, 1)?;
+        Ok(Vec::new())
+    }
+
+    fn set_sound_system_master_override(
+        message: &AcreMessage,
+    ) -> Result<Vec<AcreAction>, AcreSessionError> {
+        expect_arity(message, 1)?;
+        Ok(vec![AcreAction::SoundSystemOverrideChanged(
+            parse_i32(message, 0)? == 1,
+        )])
+    }
+
+    fn local_mute(message: &AcreMessage) -> Result<Vec<AcreAction>, AcreSessionError> {
+        expect_arity(message, 1)?;
+        Ok(vec![AcreAction::LocalMuteChanged(
+            parse_i32(message, 0)? == 1,
+        )])
+    }
+
+    fn set_muted(message: &AcreMessage) -> Result<Vec<AcreAction>, AcreSessionError> {
+        if !message.parameters().len().is_multiple_of(2) {
+            return Err(AcreSessionError::WrongArity {
+                procedure: message.procedure().to_owned(),
+                expected: "an even number of",
+                actual: message.parameters().len(),
+            });
+        }
+
+        message
+            .parameters()
+            .chunks_exact(2)
+            .map(|pair| {
+                let voice_client_id = pair[0].parse::<u32>().map_err(|_| {
+                    AcreSessionError::InvalidUnsignedInteger {
+                        procedure: message.procedure().to_owned(),
+                        index: 0,
+                    }
+                })?;
+                let muted =
+                    pair[1]
+                        .parse::<i32>()
+                        .map_err(|_| AcreSessionError::InvalidInteger {
+                            procedure: message.procedure().to_owned(),
+                            index: 1,
+                        })?
+                        != 0;
+                Ok(AcreAction::UserMuteChanged {
+                    voice_client_id,
+                    muted,
+                })
+            })
+            .collect()
+    }
+
+    fn validate_ptt_keys(message: &AcreMessage) -> Result<Vec<AcreAction>, AcreSessionError> {
+        expect_arity(message, 5)?;
+        if message.parameters()[0].is_empty() {
+            return Err(AcreSessionError::EmptyPttKeyMode);
+        }
+        for index in 1..5 {
+            let _ = parse_i32(message, index)?;
+        }
+        // ACRE2's stock handler currently has its keybinding side effect
+        // disabled; PTT start/stop RPCs remain the authoritative input.
         Ok(Vec::new())
     }
 
@@ -638,6 +721,7 @@ fn expect_arity(message: &AcreMessage, expected: usize) -> Result<(), AcreSessio
             expected: match expected {
                 0 => "zero",
                 1 => "one",
+                2 => "two",
                 _ => "the expected number of",
             },
             actual: message.parameters().len(),
@@ -759,6 +843,8 @@ pub enum AcreSessionError {
     LocalNetIdUnavailable,
     #[error("radio PTT requires a non-empty radio ID")]
     EmptyRadioId,
+    #[error("ACRE PTT key mode cannot be empty")]
+    EmptyPttKeyMode,
     #[error("ACRE setting name cannot be empty")]
     EmptySettingName,
     #[error("Mumble VOIP metadata is unavailable")]
@@ -775,6 +861,8 @@ pub enum AcreSessionError {
     InvalidVoipMetadataField(&'static str),
     #[error("ACRE RPC {procedure} parameter {index} must be a signed integer")]
     InvalidInteger { procedure: String, index: usize },
+    #[error("ACRE RPC {procedure} parameter {index} must be an unsigned integer")]
+    InvalidUnsignedInteger { procedure: String, index: usize },
     #[error("ACRE RPC {procedure} parameter {index} must be a finite float")]
     InvalidFloat { procedure: String, index: usize },
     #[error("ACRE curve scale must be finite")]
@@ -799,6 +887,9 @@ mod tests {
                 AcreAction::SendToArma(message) => Some(message),
                 AcreAction::LocalTransmissionStarted(_)
                 | AcreAction::LocalTransmissionStopped(_)
+                | AcreAction::SoundSystemOverrideChanged(_)
+                | AcreAction::LocalMuteChanged(_)
+                | AcreAction::UserMuteChanged { .. }
                 | AcreAction::ListenerUpdated(_)
                 | AcreAction::SpeakingUpdated(_)
                 | AcreAction::SoundLoaded(_)
@@ -812,7 +903,7 @@ mod tests {
         let mut session = AcreSession::default();
         session.set_local_voice_client_id(Some(41));
         session
-            .handle_from_arma(&incoming("getClientID:2:1234,"), 0.0)
+            .handle_from_arma(&incoming("getClientID:2:1234,76561198000000000,"), 0.0)
             .unwrap();
         session
             .handle_from_arma(&incoming("updateSelf:10,20,30,0,1,0,7,"), 0.0)
@@ -840,13 +931,54 @@ mod tests {
         );
 
         let identity = session
-            .handle_from_arma(&incoming("getClientID:2:1234,"), 0.0)
+            .handle_from_arma(&incoming("getClientID:2:1234,76561198000000000,"), 0.0)
             .unwrap();
         assert_eq!(
             sent(&identity)[0].encode_text(),
             "handleGetClientID:41,2:1234,"
         );
         assert_eq!(session.local_net_id(), Some("2:1234"));
+    }
+
+    #[test]
+    fn handles_stock_audio_override_and_muting_controls() {
+        let mut session = AcreSession::default();
+
+        assert_eq!(
+            session.handle_from_arma(&incoming("setSoundSystemMasterOverride:1,"), 0.0),
+            Ok(vec![AcreAction::SoundSystemOverrideChanged(true)])
+        );
+        assert_eq!(
+            session.handle_from_arma(&incoming("setSoundSystemMasterOverride:0,"), 0.0),
+            Ok(vec![AcreAction::SoundSystemOverrideChanged(false)])
+        );
+        assert_eq!(
+            session.handle_from_arma(&incoming("localMute:1,"), 0.0),
+            Ok(vec![AcreAction::LocalMuteChanged(true)])
+        );
+        assert_eq!(
+            session.handle_from_arma(&incoming("setMuted:42,1,43,0,"), 0.0),
+            Ok(vec![
+                AcreAction::UserMuteChanged {
+                    voice_client_id: 42,
+                    muted: true,
+                },
+                AcreAction::UserMuteChanged {
+                    voice_client_id: 43,
+                    muted: false,
+                },
+            ])
+        );
+        assert!(
+            session
+                .handle_from_arma(&incoming("setPTTKeys:radio,1,0,0,0,"), 0.0)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(matches!(
+            session.handle_from_arma(&incoming("setMuted:42,"), 0.0),
+            Err(AcreSessionError::WrongArity { .. })
+        ));
     }
 
     #[test]
@@ -1092,7 +1224,7 @@ mod tests {
                 .unwrap_err(),
             AcreSessionError::WrongArity {
                 procedure: "getClientID".to_owned(),
-                expected: "one",
+                expected: "two",
                 actual: 0,
             }
         );
@@ -1174,7 +1306,7 @@ mod tests {
         let mut session = AcreSession::default();
         session.set_local_voice_client_id(Some(41));
         session
-            .handle_from_arma(&incoming("getClientID:2:local,"), 0.0)
+            .handle_from_arma(&incoming("getClientID:2:local,76561198000000000,"), 0.0)
             .unwrap();
         session
             .handle_from_arma(&incoming("startIntercomSpeaking:"), 0.0)

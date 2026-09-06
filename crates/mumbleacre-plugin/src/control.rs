@@ -287,7 +287,10 @@ mod tests {
         let mut sender = AcreSession::default();
         sender.set_local_voice_client_id(Some(42));
         sender
-            .handle_from_arma(&AcreMessage::parse(b"getClientID:1:2,").unwrap(), 0.0)
+            .handle_from_arma(
+                &AcreMessage::parse(b"getClientID:1:2,76561198000000000,").unwrap(),
+                0.0,
+            )
             .unwrap();
         let actions = sender
             .handle_from_arma(

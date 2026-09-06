@@ -17,6 +17,7 @@ use std::{
 pub struct Audio {
     pub decisions: AcreAudioSnapshotStore,
     pub peers: Publication<HashMap<u32, Instant>>,
+    sound_system_override: AtomicBool,
     slots: Box<[Slot]>,
 }
 struct Slot {
@@ -59,6 +60,7 @@ pub fn init() {
     AUDIO.get_or_init(|| Audio {
         decisions: Default::default(),
         peers: Publication::new(HashMap::new()),
+        sound_system_override: AtomicBool::new(false),
         slots: (0..128)
             .map(|i| Slot {
                 busy: AtomicBool::new(false),
@@ -81,11 +83,25 @@ pub fn mute(id: u32) {
         .into(),
     ));
 }
+/// Enables or disables ACRE's global voice-renderer override. The pipe worker
+/// updates this atomically through the main-thread runtime; the callback only
+/// performs the lock-free load and silences speech while the override is set.
+pub fn set_sound_system_override(enabled: bool) {
+    if let Some(audio) = AUDIO.get() {
+        audio
+            .sound_system_override
+            .store(enabled, Ordering::Release);
+    }
+}
 pub fn process(id: u32, samples: &mut [f32], channels: usize, rate: u32) {
     let Some(audio) = AUDIO.get() else {
         samples.fill(0.0);
         return;
     };
+    if audio.sound_system_override.load(Ordering::Acquire) {
+        samples.fill(0.0);
+        return;
+    }
     let now = Instant::now();
     let peers = audio.peers.load_full();
     if peers
@@ -190,6 +206,7 @@ mod tests {
     #[test]
     fn integrated_audio_requires_peer_lease_and_acre_decision_without_allocating() {
         init();
+        set_sound_system_override(false);
         let audio = get();
         let id = 9001;
         let vector = AcreSpeakerVector {
@@ -259,5 +276,31 @@ mod tests {
         pcm.fill(0.2);
         process(id, &mut pcm, 2, 48000);
         assert!(pcm.iter().all(|v| *v == 0.0));
+    }
+
+    #[test]
+    fn sound_system_override_silences_speech_without_mutating_the_snapshot() {
+        init();
+        let audio = get();
+        let id = 9002;
+        audio
+            .peers
+            .store(Arc::new(HashMap::from([(id, Instant::now())])));
+        audio
+            .decisions
+            .publish(AcreAudioUpdate::Speaker(
+                SpeakingUpdate {
+                    speaker_id: id,
+                    speaks_babel: false,
+                    decision: SpeakingDecision::God { volume: 1.0 },
+                }
+                .into(),
+            ))
+            .unwrap();
+        set_sound_system_override(true);
+        let mut pcm = [0.2; 16];
+        process(id, &mut pcm, 2, 48000);
+        assert!(pcm.iter().all(|sample| *sample == 0.0));
+        set_sound_system_override(false);
     }
 }

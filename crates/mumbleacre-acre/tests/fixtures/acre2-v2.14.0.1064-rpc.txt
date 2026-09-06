@@ -6,7 +6,7 @@ ping:
 pong:12.500000,
 getPluginVersion:
 handleGetPluginVersion:2.14.0.1064
-getClientID:2:1234,
+getClientID:2:1234,76561198000000000,
 handleGetClientID:42,2:1234,
 updateSelf:10,20,30,0,1,0,7,
 setVoiceCurveModel:2,0.750000,

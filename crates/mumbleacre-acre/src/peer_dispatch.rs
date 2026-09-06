@@ -58,6 +58,9 @@ mod tests {
                 AcreAction::SendToArma(message) => Some(message.encode_text()),
                 AcreAction::LocalTransmissionStarted(_)
                 | AcreAction::LocalTransmissionStopped(_)
+                | AcreAction::SoundSystemOverrideChanged(_)
+                | AcreAction::LocalMuteChanged(_)
+                | AcreAction::UserMuteChanged { .. }
                 | AcreAction::ListenerUpdated(_)
                 | AcreAction::SpeakingUpdated(_)
                 | AcreAction::SoundLoaded(_)

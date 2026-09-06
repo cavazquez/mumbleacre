@@ -235,9 +235,9 @@ mod tests {
 
     #[test]
     fn parses_the_forms_emitted_by_acre2_arma_and_the_stock_plugin() {
-        let without_nul = AcreMessage::parse(b"getClientID:2:1234,").unwrap();
+        let without_nul = AcreMessage::parse(b"getClientID:2:1234,76561198000000000,").unwrap();
         assert_eq!(without_nul.procedure(), "getClientID");
-        assert_eq!(without_nul.parameters(), ["2:1234"]);
+        assert_eq!(without_nul.parameters(), ["2:1234", "76561198000000000"]);
         assert!(without_nul.trailing_comma());
 
         let with_nul = AcreMessage::parse(b"handleGetPluginVersion:2.14.0.1064\0").unwrap();
