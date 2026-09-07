@@ -29,7 +29,11 @@ con dos clientes Windows y Arma.
 
    Estos límites se comparten entre los plugins de cada cliente. El valor por
    defecto no alcanza para este backend. Ver [configuración oficial de Mumble](https://github.com/mumble-voip/mumble/blob/master/auxiliary_files/mumble-server.ini).
-4. Cerrar Mumble y abrirlo normalmente: el plugin usa el canal Mumble activo
+4. Crear en el servidor Mumble un canal llamado exactamente `ACRE` (en
+   mayúsculas) y dar a los jugadores permiso para entrar. Al conectarse ACRE,
+   el plugin busca ese nombre con coincidencia exacta —`acre`, `ACRE 1` y
+   cualquier nombre que sólo lo contenga no sirven— y solicita que Mumble mueva al usuario local. No usa
+   contraseña de canal ni cambia grupos. El plugin usa el canal Mumble activo
    como límite de la partida, así que no requiere un identificador de misión:
 
    ```powershell
@@ -40,17 +44,23 @@ con dos clientes Windows y Arma.
    grupo adicionalmente; si se usa, debe tener el mismo valor en todos los
    clientes. Habilitar MumbleACRE en la lista de plugins si todavía no está
    habilitado.
-5. Entrar todos al mismo canal Mumble **administrado y exclusivo de esa
-   partida**, con el mismo plugin. El servidor dedicado de Arma sólo necesita
-   CBA + ACRE y los mods de la misión. El backend se instala en cada cliente.
+5. Confirmar que todos quedaron en `ACRE`, el mismo canal Mumble
+   **administrado y exclusivo de esa partida**, con el mismo plugin. Si el
+   cambio falla, comprobar primero que exista ese nombre exacto y que el
+   usuario pueda entrar. El servidor dedicado de Arma sólo necesita CBA + ACRE
+   y los mods de la misión. El backend se instala en cada cliente.
 6. Para la fixture, cargar también `@mumbleacre` y copiar
    `missions/mumbleacre_smoke.VR` a las misiones de Arma. El addon sólo agrega
    presets de misión y es opcional para misiones ACRE existentes.
 
 La voz directa usa el PTT/VAD de Mumble; radio e intercom usan las teclas de
-ACRE. Fuera de la partida, deshabilitar el plugin para usar Mumble normalmente. No usar whisper/shout ni canales enlazados para la partida. Un usuario
+ACRE. Fuera de una sesión ACRE conectada, el plugin deja pasar el audio normal
+de Mumble; deshabilitarlo sólo evita el cambio automático a `ACRE` al iniciar
+Arma. No usar whisper/shout ni canales enlazados para la partida. Un usuario
 sin plugin en el canal puede oír la voz transportada sin los filtros ACRE;
 el canal debe excluir esos clientes. Esto no es cifrado de redes de radio.
+El nombre visible en Mumble sigue siendo el configurado por el usuario: la API
+de plugins usada por Mumble no expone una operación para renombrar usuarios.
 
 ## Qué incluye
 
@@ -59,7 +69,9 @@ el canal debe excluir esos clientes. Esto no es cifrado de redes de radio.
 - PTT ACRE conectado al micrófono; voz directa nativa y cambios de modo.
 - Render de decisiones ACRE: distancia, paneo, radio multipath, altavoz,
   intercom y Babel. Sin decisión vigente se silencia la fuente.
-- Sonidos locales centrados de ACRE, preparados fuera del callback de audio.
+- Sonidos locales centrados de ACRE, preparados fuera del callback de audio;
+  pips genéricos de radio de respaldo si una partida ya iniciada no reenvía sus
+  sonidos después de reconectar el plugin.
 - PRC-152 y PRC-117F con presets de misión y fixture de dos jugadores.
 
 Los modos remotos God/Zeus se rechazan hasta contar con autorización adicional;
@@ -91,11 +103,25 @@ Windows. SQF-VM se descarga con hash fijado; se puede pasar `SQFVM_BIN` para
 usar una copia local. CI también ejecuta las pruebas nativas Windows.
 
 Diagnóstico del pipe: `%LOCALAPPDATA%\MumbleACRE\logs\plugin.log`, con rotación.
-El chat/log Mumble informa arranque, conexión ACRE, pérdida de salud y colas
-saturadas. Si no conecta: revisar que MumbleACRE esté habilitado, la versión de
-ACRE, que ningún otro cliente posea el pipe y el canal Mumble. Si se corta la
-voz: revisar primero los límites del servidor y luego guardar logs y RPT para
-la prueba de QA.
+El chat/log Mumble informa arranque, conexión ACRE, solicitud de canal, cambio
+entre audio normal y filtrado ACRE, pérdida de salud y colas saturadas. Si no
+conecta: revisar que MumbleACRE esté habilitado, la versión de ACRE, que ningún
+otro cliente posea el pipe y el canal Mumble. Si se corta la voz: revisar
+primero los límites del servidor y luego guardar logs y RPT para la prueba de
+QA.
+
+Para reunir un reporte local sin cambiar la configuración ni necesitar otro
+jugador, ejecutar:
+
+```powershell
+.\scripts\diagnose-mumbleacre.ps1
+```
+
+El script comprueba el bundle, hash de la DLL distribuida, instalación de
+Mumble, proceso activo, el estado del pipe ACRE para ese proceso y las últimas
+líneas del log. Si `murmur.ini` está en esa misma máquina, agrega
+`-MurmurIni C:\ruta\murmur.ini` para comprobar los dos límites requeridos. La
+copia distribuida incluye el mismo script junto a `start-mumble.ps1`.
 
 [Arquitectura y límites](docs/runtime.md) · [Misión](docs/acre-mission-integration.md)
 · [QA pendiente](docs/qa.md) · [Proveniencia y GPL-3.0](NOTICE.md)

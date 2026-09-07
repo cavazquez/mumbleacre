@@ -32,6 +32,13 @@ opcional compartido, no una credencial ni una identidad de misión autenticada p
 Arma. El protocolo asume miembros confiables del canal; no autoriza God/Zeus por
 un campo enviado por un peer.
 
+Cuando ACRE se conecta, ese mismo timer busca el canal llamado exactamente
+`ACRE` mediante la API de Mumble (la búsqueda distingue mayúsculas/minúsculas)
+y solicita mover al usuario local. No usa contraseñas, grupos ni coincidencias
+parciales. Sólo hay un intento por conexión/usuario/servidor Mumble: si el canal
+no existe o el servidor rechaza la entrada, se registra el error sin reintentar
+en un bucle.
+
 Una transmisión remota vence tras 250 ms sin estado nuevo, emite STOP y pierde
 el permiso de audio. La callback verifica ese mismo plazo con reloj monotónico
 incluso si el hilo principal está detenido. ACRE decide si se oye y cómo: nunca
@@ -54,6 +61,17 @@ desactiva el micrófono local. `setMuted` solicita el mute local de Mumble para
 el usuario indicado. Ninguna de esas operaciones se ejecuta desde el worker de
 pipes ni el callback de audio.
 
+El filtro ACRE sólo se activa cuando el pipe está conectado y existe un
+contexto Mumble sincronizado. Antes de eso —o ante pérdida del pipe, del
+contexto o un reset— la callback declara que no modificó el PCM: Mumble conserva
+su audio de voz normal. Una vez activa la sesión, una fuente sin decisión ACRE
+vigente sí se silencia como parte de la política ACRE.
+
+El chat de Mumble y `%LOCALAPPDATA%\MumbleACRE\logs\plugin.log` registran cada
+transición entre `audio normal de Mumble activo` y `filtrado de audio ACRE
+activo`. Es una comprobación local: no requiere otro jugador y permite separar
+un problema de pipe/contexto de uno de transmisión entre pares.
+
 Audio: 128 slots DSP preasignados, acceso exclusivo con atómico sin espera,
 snapshots inmutables y búsqueda por sesión. Colisiones de slot reinician DSP;
 un callback concurrente sobre un slot ocupado se silencia. No se llama a la
@@ -66,3 +84,9 @@ altavoces en decisiones de radio. God/Zeus remotos se rechazan; `setSetting` y
 `setTs3ChannelDetails` se validan pero no cambian configuración del cliente.
 Sonidos RPC mundiales/posicionales no se reproducen. Los tests de codecs no
 constituyen prueba de paridad funcional de toda la superficie ACRE.
+
+Los sonidos cargados por ACRE se conservan entre reconexiones del pipe: ACRE
+puede recordar una carga durante toda la sesión de Arma y no volver a enviar el
+WAV al reconectar el plugin. Si aun así pide `Acre_GenericBeep` o los clicks
+genéricos sin reenviar su archivo, el worker genera un pip local centrado. Una
+carga posterior de ACRE reemplaza ese respaldo.

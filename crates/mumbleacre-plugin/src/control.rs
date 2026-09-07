@@ -215,6 +215,73 @@ impl RemotePeers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct SimulatedMumbleClient {
+        voice_id: u32,
+        net_id: String,
+        generation: u64,
+        sequence: u64,
+        remote_peers: RemotePeers,
+        acre: AcreSession,
+    }
+
+    impl SimulatedMumbleClient {
+        fn new(voice_id: u32, net_id: &str) -> Self {
+            Self {
+                voice_id,
+                net_id: net_id.to_owned(),
+                generation: 1,
+                sequence: 0,
+                remote_peers: RemotePeers::default(),
+                acre: AcreSession::default(),
+            }
+        }
+
+        fn publish(&mut self, active: Option<&Transmission>) -> Vec<u8> {
+            self.sequence += 1;
+            StateMessage::new(
+                "mumble-channel",
+                self.generation,
+                self.sequence,
+                &self.net_id,
+                active,
+            )
+            .unwrap()
+            .encode()
+            .unwrap()
+        }
+
+        fn reconnect(&mut self) {
+            self.generation += 1;
+            self.sequence = 0;
+        }
+
+        fn receive(&mut self, sender: u32, packet: &[u8], now: Instant) -> Vec<String> {
+            let state = StateMessage::decode(packet).unwrap();
+            let actions = self
+                .remote_peers
+                .receive(sender, "mumble-channel", state, now)
+                .unwrap();
+            sent_text(&apply_peer_state_actions(&mut self.acre, actions).unwrap())
+        }
+
+        fn expire(&mut self, now: Instant) -> Vec<String> {
+            sent_text(
+                &apply_peer_state_actions(&mut self.acre, self.remote_peers.expire(now)).unwrap(),
+            )
+        }
+    }
+
+    fn sent_text(actions: &[AcreAction]) -> Vec<String> {
+        actions
+            .iter()
+            .filter_map(|action| match action {
+                AcreAction::SendToArma(message) => Some(message.encode_text()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn state(sequence: u64, active: bool) -> StateMessage {
         let tx =
             Transmission::new(999, 0, "1:2", SpeakingKind::Radio, "ACRE_PRC152_ID_1", 1.0).unwrap();
@@ -349,5 +416,69 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(peers.audible(now).len(), 1);
+    }
+
+    #[test]
+    fn two_simulated_mumble_clients_recover_from_lost_stop_and_reconnect() {
+        let now = Instant::now();
+        let mut alice = SimulatedMumbleClient::new(42, "1:alice");
+        let mut bob = SimulatedMumbleClient::new(77, "1:bob");
+        let alice_radio = Transmission::new(
+            alice.voice_id,
+            0,
+            &alice.net_id,
+            SpeakingKind::Radio,
+            "ACRE_PRC152_ID_1",
+            1.0,
+        )
+        .unwrap();
+        let bob_direct =
+            Transmission::new(bob.voice_id, 0, &bob.net_id, SpeakingKind::Direct, "", 1.0).unwrap();
+
+        let alice_packet = alice.publish(Some(&alice_radio));
+        assert_eq!(
+            bob.receive(alice.voice_id, &alice_packet, now),
+            ["remoteStartSpeaking:42,0,1:alice,1,ACRE_PRC152_ID_1,".to_owned()]
+        );
+        let bob_packet = bob.publish(Some(&bob_direct));
+        assert_eq!(
+            alice.receive(bob.voice_id, &bob_packet, now),
+            ["remoteStartSpeaking:77,0,1:bob,0,,".to_owned()]
+        );
+
+        // Alice's STOP is lost. A pipe reconnect starts a new generation with
+        // a complete state, so Bob first closes the old RPC then opens the new
+        // transmission without relying on the missing packet.
+        let delayed_old_stop = alice.publish(None);
+        alice.reconnect();
+        let reconnect_packet = alice.publish(Some(&alice_radio));
+        assert_eq!(
+            bob.receive(
+                alice.voice_id,
+                &reconnect_packet,
+                now + Duration::from_millis(10)
+            ),
+            [
+                "remoteStopSpeaking:42,1:alice,1,ACRE_PRC152_ID_1,".to_owned(),
+                "remoteStartSpeaking:42,0,1:alice,1,ACRE_PRC152_ID_1,".to_owned(),
+            ]
+        );
+        assert!(
+            bob.receive(
+                alice.voice_id,
+                &delayed_old_stop,
+                now + Duration::from_millis(20)
+            )
+            .is_empty()
+        );
+
+        assert_eq!(
+            bob.expire(now + LEASE + Duration::from_millis(10)),
+            ["remoteStopSpeaking:42,1:alice,1,ACRE_PRC152_ID_1,".to_owned()]
+        );
+        assert_eq!(
+            alice.expire(now + LEASE + Duration::from_millis(10)),
+            ["remoteStopSpeaking:77,1:bob,0,,".to_owned()]
+        );
     }
 }

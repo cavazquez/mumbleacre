@@ -6,6 +6,12 @@ Linux. No marcar esta lista como aprobada usando sólo los tests unitarios.
 Registrar versiones de Windows, Mumble/Murmur, CBA, ACRE, hash de la DLL,
 configuración de rate limit, logs del plugin y RPT de cada cliente/servidor.
 
+Antes de la prueba entre jugadores, ejecutar `diagnose-mumbleacre.ps1`. Debe
+mostrar el bundle esperado y `DLL SHA256: OK`. Después de abrir Arma debe
+informar `ACRE pipe: CONNECTED`; el chat de Mumble confirma el filtrado de
+audio ACRE. Es una comprobación local de instalación, pipe y contexto; no
+reemplaza la prueba real de voz.
+
 1. Dos PCs Windows x64, mismo canal administrado, misma misión y bundle;
    plugin TeamSpeak deshabilitado. Verificar handshake ACRE sin alertas.
 2. Fixture `mumbleacre_smoke.VR`: directo cerca/lejos, giro de cabeza, radio

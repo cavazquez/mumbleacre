@@ -55,7 +55,9 @@ enum AcreSoundWorkerJob {
         generation: u64,
         request: AcreSoundPlayback,
     },
-    Clear,
+    AdvanceGeneration {
+        generation: u64,
+    },
 }
 
 /// Outcome returned to the pipe/control boundary. Paths are ready only for a
@@ -143,11 +145,12 @@ impl AcreSoundWorkerClient {
         })
     }
 
-    /// Best-effort lifecycle boundary used after ACRE reset/disconnect. Active
-    /// files are retained until Mumble has had enough time to consume them,
-    /// but a later request can never resolve an old loaded-sound ID.
-    pub(crate) fn enqueue_clear(&self) -> Result<(), &'static str> {
-        self.try_enqueue(AcreSoundWorkerJob::Clear)
+    /// Keeps valid loaded sounds across a transient ACRE pipe reset. ACRE keeps
+    /// its own loaded-sound registry for the lifetime of an Arma session and
+    /// may therefore not upload a static radio sound again after a bridge
+    /// reconnect.
+    pub(crate) fn enqueue_advance_generation(&self, generation: u64) -> Result<(), &'static str> {
+        self.try_enqueue(AcreSoundWorkerJob::AdvanceGeneration { generation })
     }
 
     pub(crate) fn drain_results(&self) -> Vec<AcreSoundWorkerResult> {
@@ -214,9 +217,8 @@ fn sound_worker_loop(
                 &mut playback_files,
                 &mut playback_nonce,
             ),
-            AcreSoundWorkerJob::Clear => {
-                cache.clear();
-                cached_sample_bytes = 0;
+            AcreSoundWorkerJob::AdvanceGeneration { generation } => {
+                advance_cached_sound_generation(&mut cache, generation);
                 continue;
             }
         };
@@ -305,11 +307,22 @@ fn prepare_playback_file(
         };
     }
     let Some(sound) = cache.get(&id) else {
-        return AcreSoundWorkerResult::PlaybackFailed {
+        let Some(fallback) = built_in_radio_sound(&id, generation) else {
+            return AcreSoundWorkerResult::PlaybackFailed {
+                generation,
+                id,
+                reason: "ACRE sound was not prepared".to_owned(),
+            };
+        };
+        return prepare_playback_file_for_sound(
             generation,
             id,
-            reason: "ACRE sound was not prepared".to_owned(),
-        };
+            request,
+            &fallback,
+            directory,
+            playback_files,
+            playback_nonce,
+        );
     };
     if sound.generation != generation {
         return AcreSoundWorkerResult::PlaybackFailed {
@@ -318,6 +331,26 @@ fn prepare_playback_file(
             reason: "ACRE sound belongs to a previous control generation".to_owned(),
         };
     }
+    prepare_playback_file_for_sound(
+        generation,
+        id,
+        request,
+        sound,
+        directory,
+        playback_files,
+        playback_nonce,
+    )
+}
+
+fn prepare_playback_file_for_sound(
+    generation: u64,
+    id: String,
+    request: &AcreSoundPlayback,
+    sound: &CachedSound,
+    directory: &Path,
+    playback_files: &mut VecDeque<PlaybackFile>,
+    playback_nonce: &mut u64,
+) -> AcreSoundWorkerResult {
     cleanup_expired_playback_files(playback_files, Instant::now());
     if playback_files.len() >= MAX_ACTIVE_PLAYBACK_FILES {
         return AcreSoundWorkerResult::PlaybackFailed {
@@ -355,6 +388,74 @@ fn prepare_playback_file(
         id,
         path,
     }
+}
+
+fn advance_cached_sound_generation(cache: &mut HashMap<String, CachedSound>, generation: u64) {
+    for sound in cache.values_mut() {
+        sound.generation = generation;
+    }
+}
+
+/// ACRE records static radio sounds as loaded for the complete Arma session.
+/// If MumbleACRE is installed or reconnects after that point, ACRE can ask to
+/// play a generic beep/click without sending its WAV again. These compact,
+/// deterministic local fallbacks keep the handheld radio feedback audible;
+/// an ACRE-provided `loadSound` always replaces them when available.
+fn built_in_radio_sound(id: &str, generation: u64) -> Option<CachedSound> {
+    const SAMPLE_RATE: u32 = 48_000;
+    let (tag, sample_count, frequency_hz, amplitude, decaying) = match id {
+        "Acre_GenericBeep" => (1, 4_800, 880.0, 0.30, false),
+        "Acre_GenericClick" | "Acre_GenericClickOn" => (2, 1_200, 1_400.0, 0.24, true),
+        "Acre_GenericClickOff" => (3, 1_440, 620.0, 0.24, true),
+        _ => return None,
+    };
+    let samples = synthesize_radio_tone(sample_count, frequency_hz, amplitude, decaying);
+    let mut sha256 = [0_u8; 32];
+    sha256[0] = tag;
+    for (slot, byte) in sha256.iter_mut().skip(1).zip(id.bytes()) {
+        *slot = byte;
+    }
+    Some(CachedSound {
+        generation,
+        sha256,
+        spec: WavSpec {
+            channels: 1,
+            sample_rate: SAMPLE_RATE,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        },
+        duration: Duration::from_secs_f64(samples.len() as f64 / f64::from(SAMPLE_RATE)),
+        samples,
+    })
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss
+)]
+fn synthesize_radio_tone(
+    sample_count: usize,
+    frequency_hz: f32,
+    amplitude: f32,
+    decaying: bool,
+) -> Vec<i16> {
+    let mut samples = Vec::with_capacity(sample_count);
+    let sample_rate = 48_000.0;
+    let fade_samples = 240.0;
+    for index in 0..sample_count {
+        let progress = index as f32 / sample_count as f32;
+        let envelope = if decaying {
+            (1.0 - progress).powi(3)
+        } else {
+            let fade_in = (index as f32 / fade_samples).min(1.0);
+            let fade_out = ((sample_count.saturating_sub(index) as f32) / fade_samples).min(1.0);
+            fade_in * fade_out
+        };
+        let sample = (std::f32::consts::TAU * frequency_hz * index as f32 / sample_rate).sin();
+        samples.push((sample * amplitude * envelope * f32::from(i16::MAX)).round() as i16);
+    }
+    samples
 }
 
 fn is_supported_local_sample(request: &AcreSoundPlayback) -> bool {
@@ -640,5 +741,54 @@ mod tests {
         )
         .unwrap();
         assert!(!is_supported_local_sample(&world));
+    }
+
+    #[test]
+    fn generic_radio_pips_are_synthesized_when_acre_does_not_resend_them() {
+        let request = parse_play_loaded_sound(
+            &AcreMessage::parse(b"playLoadedSound:Acre_GenericBeep,0,0,0,0,0,0,0.5,0,").unwrap(),
+        )
+        .unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "mumbleacre-acre-sound-fallback-test-{}-{}",
+            std::process::id(),
+            NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed),
+        ));
+        let mut playback_files = VecDeque::new();
+        let mut playback_nonce = 0;
+        let result = prepare_playback_file(
+            11,
+            &request,
+            &HashMap::new(),
+            &directory,
+            &mut playback_files,
+            &mut playback_nonce,
+        );
+        let path = match result {
+            AcreSoundWorkerResult::PlaybackReady {
+                generation: 11,
+                path,
+                ..
+            } => path,
+            other => panic!("expected generic radio fallback, got {other:?}"),
+        };
+        let prepared = parse_acre_wav(&fs::read(&path).unwrap()).unwrap();
+        assert!(prepared.samples.iter().any(|sample| *sample != 0));
+
+        cleanup_expired_playback_files(
+            &mut playback_files,
+            Instant::now() + MAX_SOUND_DURATION + PLAYBACK_FILE_GRACE,
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn reconnecting_promotes_prepared_sounds_to_the_new_generation() {
+        let mut cache = HashMap::from([(
+            "Acre_GenericBeep".to_owned(),
+            built_in_radio_sound("Acre_GenericBeep", 3).unwrap(),
+        )]);
+        advance_cached_sound_generation(&mut cache, 4);
+        assert_eq!(cache["Acre_GenericBeep"].generation, 4);
     }
 }

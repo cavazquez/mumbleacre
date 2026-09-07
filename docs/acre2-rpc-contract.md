@@ -30,7 +30,7 @@ compatibilidad rompe el gate.
 | PTT | Radio/intercom y voz nativa conectados; God/Zeus sólo codec, no envío remoto. |
 | Pares | Estado completo Mumble convertido a `remoteStartSpeaking`/`remoteStopSpeaking`. |
 | Audio | `updateSpeakingData` tipado, publicación inmutable y DSP ACRE. |
-| Sonidos | `loadSound`/`playLoadedSound`, sólo locales centrados; otros reciben error. |
+| Sonidos | `loadSound`/`playLoadedSound`, sólo locales centrados; pips genéricos de respaldo si ACRE no reenvía un sonido ya recordado. Otros reciben error. |
 
 En `v2.14.0.1064`, `getClientID` llega desde Arma con dos parámetros:
 `netId` y `playerUID`. MumbleACRE conserva el `netId` para asociar el estado

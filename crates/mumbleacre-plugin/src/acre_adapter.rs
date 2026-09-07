@@ -758,11 +758,14 @@ fn reset_sound_worker(
     shared
         .sound_generation
         .store(*sound_generation, Ordering::Release);
-    if let Err(reason) = shared.sound_worker.enqueue_clear() {
+    if let Err(reason) = shared
+        .sound_worker
+        .enqueue_advance_generation(*sound_generation)
+    {
         crate::write_event(
             event_log,
             LogLevel::Warn,
-            "acre_sound_clear_dropped",
+            "acre_sound_generation_advance_dropped",
             &format!("reason={reason}"),
         );
     }

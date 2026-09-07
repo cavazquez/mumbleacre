@@ -12,6 +12,7 @@ pub type mumble_error_t = c_int;
 
 pub const MUMBLE_STATUS_OK: mumble_error_t = 0;
 pub const MUMBLE_EC_GENERIC_ERROR: mumble_error_t = -1;
+pub const MUMBLE_EC_CHANNEL_NOT_FOUND: mumble_error_t = 4;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -107,11 +108,26 @@ type MumbleFnRequestLocalUserTransmissionMode = unsafe extern "C" fn(
     transmission_mode: mumble_transmission_mode_t,
 ) -> mumble_error_t;
 
+type MumbleFnRequestUserMove = unsafe extern "C" fn(
+    caller_id: mumble_plugin_id_t,
+    connection: mumble_connection_t,
+    user_id: mumble_userid_t,
+    channel_id: mumble_channelid_t,
+    password: *const c_char,
+) -> mumble_error_t;
+
 type MumbleFnRequestLocalMute = unsafe extern "C" fn(
     caller_id: mumble_plugin_id_t,
     connection: mumble_connection_t,
     user_id: mumble_userid_t,
     muted: bool,
+) -> mumble_error_t;
+
+type MumbleFnFindChannelByName = unsafe extern "C" fn(
+    caller_id: mumble_plugin_id_t,
+    connection: mumble_connection_t,
+    channel_name: *const c_char,
+    channel_id: *mut mumble_channelid_t,
 ) -> mumble_error_t;
 
 type MumbleFnSendData = unsafe extern "C" fn(
@@ -153,8 +169,10 @@ type MumbleFnRequestMicrophoneActivationOverwrite =
 ///  11: isUserLocallyMuted
 ///  15: getServerHash
 ///  18: requestLocalUserTransmissionMode
+///  19: requestUserMove
 ///  20: requestMicrophoneActivationOvewrite (Mumble typo)
 ///  21: requestLocalMute
+///  26: findChannelByName
 ///  35: sendData
 ///  36: log
 ///  37: playSample
@@ -176,10 +194,12 @@ struct MumbleAPI {
     get_server_hash: MumbleFnGetServerHash, // index 15
     _api_fields_16_to_17: [OpaqueFnPtr; 2], // indices 16..=17
     request_local_user_transmission_mode: MumbleFnRequestLocalUserTransmissionMode, // index 18
-    _request_user_move: OpaqueFnPtr, // index 19
+    request_user_move: MumbleFnRequestUserMove, // index 19
     request_microphone_activation_overwrite: MumbleFnRequestMicrophoneActivationOverwrite, // index 20
     request_local_mute: MumbleFnRequestLocalMute, // index 21
-    _api_fields_22_to_34: [OpaqueFnPtr; 13],      // indices 22..=34
+    _api_fields_22_to_25: [OpaqueFnPtr; 4],       // indices 22..=25
+    find_channel_by_name: MumbleFnFindChannelByName, // index 26
+    _api_fields_27_to_34: [OpaqueFnPtr; 8],       // indices 27..=34
     send_data: MumbleFnSendData,                  // index 35
     log: MumbleFnLog,                             // index 36
     play_sample: MumbleFnPlaySample,              // index 37
@@ -196,6 +216,8 @@ struct Api {
     users: MumbleFnGetUsersInChannel,
     channel_name: MumbleFnGetChannelName,
     server_hash: MumbleFnGetServerHash,
+    move_user: MumbleFnRequestUserMove,
+    find_channel: MumbleFnFindChannelByName,
     send: MumbleFnSendData,
     mic: MumbleFnRequestMicrophoneActivationOverwrite,
     mute: MumbleFnRequestLocalMute,
@@ -313,6 +335,53 @@ pub fn request_local_mute(context: &Context, user_id: u32, muted: bool) -> bool 
     api().is_some_and(|a| unsafe { (a.mute)(a.id, context.connection, user_id, muted) == 0 })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelMove {
+    AlreadyInChannel,
+    Requested,
+}
+
+/// Requests that Mumble move its local user to the channel whose name matches
+/// `channel_name` exactly. The Mumble API performs a case-sensitive lookup;
+/// no password, group, prefix, or fuzzy match is used here.
+///
+/// This is a synchronous Mumble API request and is called only by the
+/// main-thread runtime timer, never by an ACRE pipe worker.
+pub fn request_move_to_exact_channel(
+    context: &Context,
+    channel_name: &CStr,
+) -> Result<ChannelMove, mumble_error_t> {
+    let a = api().ok_or(MUMBLE_EC_GENERIC_ERROR)?;
+    let mut target_channel = 0;
+    let lookup = unsafe {
+        (a.find_channel)(
+            a.id,
+            context.connection,
+            channel_name.as_ptr(),
+            &mut target_channel,
+        )
+    };
+    if lookup != MUMBLE_STATUS_OK {
+        return Err(lookup);
+    }
+    if target_channel == context.channel {
+        return Ok(ChannelMove::AlreadyInChannel);
+    }
+    let requested = unsafe {
+        (a.move_user)(
+            a.id,
+            context.connection,
+            context.local,
+            target_channel,
+            std::ptr::null(),
+        )
+    };
+    if requested != MUMBLE_STATUS_OK {
+        return Err(requested);
+    }
+    Ok(ChannelMove::Requested)
+}
+
 pub fn log(message: &str) {
     if let (Some(a), Ok(s)) = (api(), CString::new(message)) {
         unsafe {
@@ -347,6 +416,8 @@ pub unsafe extern "C" fn mumble_registerAPIFunctions(ptr: *const c_void) {
         users: a.get_users_in_channel,
         channel_name: a.get_channel_name,
         server_hash: a.get_server_hash,
+        move_user: a.request_user_move,
+        find_channel: a.find_channel_by_name,
         send: a.send_data,
         mic: a.request_microphone_activation_overwrite,
         mute: a.request_local_mute,
@@ -467,8 +538,7 @@ pub unsafe extern "C" fn mumble_onAudioSourceFetched(
         return false;
     }
     let samples = unsafe { std::slice::from_raw_parts_mut(pcm, total) };
-    crate::audio::process(user_id, samples, channel_count as usize, sample_rate);
-    true
+    crate::audio::process(user_id, samples, channel_count as usize, sample_rate)
 }
 /// # Safety
 /// Mumble provides valid data and NUL-terminated data_id for this callback.
@@ -525,6 +595,11 @@ mod tests {
     #[test]
     fn api_layout() {
         let p = std::mem::size_of::<usize>();
+        assert_eq!(std::mem::offset_of!(MumbleAPI, request_user_move), 19 * p);
+        assert_eq!(
+            std::mem::offset_of!(MumbleAPI, find_channel_by_name),
+            26 * p
+        );
         assert_eq!(std::mem::offset_of!(MumbleAPI, send_data), 35 * p);
         assert_eq!(std::mem::offset_of!(MumbleAPI, play_sample), 37 * p);
         assert_eq!(std::mem::size_of::<MumbleAPI>(), 38 * p);
@@ -548,7 +623,10 @@ mod tests {
     }
 
     #[test]
-    fn speech_without_runtime_is_silent_and_notifications_untouched() {
+    fn speech_without_an_active_acre_session_is_untouched() {
+        let _guard = crate::audio::TEST_LOCK.lock().unwrap();
+        crate::audio::init();
+        crate::audio::set_acre_active(false);
         let mut pcm = [0.8; 8];
         unsafe {
             assert!(!mumble_onAudioSourceFetched(
@@ -560,7 +638,7 @@ mod tests {
                 42
             ));
             assert_eq!(pcm, [0.8; 8]);
-            assert!(mumble_onAudioSourceFetched(
+            assert!(!mumble_onAudioSourceFetched(
                 pcm.as_mut_ptr(),
                 4,
                 2,
@@ -569,6 +647,6 @@ mod tests {
                 42
             ));
         }
-        assert_eq!(pcm, [0.0; 8]);
+        assert_eq!(pcm, [0.8; 8]);
     }
 }

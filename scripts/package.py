@@ -19,7 +19,8 @@ with zipfile.ZipFile(out / "MumbleACRE.mumble_plugin", "w", zipfile.ZIP_DEFLATED
     bundle.write(out / "mumbleacre_plugin.dll", "mumbleacre_plugin.dll")
 for name in ("README.md", "LICENSE", "NOTICE.md"):
     shutil.copy2(root / name, out / name)
-shutil.copy2(root / "scripts/start-mumble.ps1", out / "start-mumble.ps1")
+for name in ("start-mumble.ps1", "diagnose-mumbleacre.ps1"):
+    shutil.copy2(root / "scripts" / name, out / name)
 (out / "docs").mkdir(exist_ok=True)
 for name in ("runtime.md", "qa.md", "acre-mission-integration.md"):
     shutil.copy2(root / "docs" / name, out / "docs" / name)

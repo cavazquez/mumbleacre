@@ -17,6 +17,7 @@ use std::{
 pub struct Audio {
     pub decisions: AcreAudioSnapshotStore,
     pub peers: Publication<HashMap<u32, Instant>>,
+    acre_active: AtomicBool,
     sound_system_override: AtomicBool,
     slots: Box<[Slot]>,
 }
@@ -56,10 +57,13 @@ impl RenderState {
     }
 }
 static AUDIO: OnceLock<Audio> = OnceLock::new();
+#[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub fn init() {
     AUDIO.get_or_init(|| Audio {
         decisions: Default::default(),
         peers: Publication::new(HashMap::new()),
+        acre_active: AtomicBool::new(false),
         sound_system_override: AtomicBool::new(false),
         slots: (0..128)
             .map(|i| Slot {
@@ -83,6 +87,14 @@ pub fn mute(id: u32) {
         .into(),
     ));
 }
+/// Enables ACRE-only voice rendering for a live ACRE/Mumble session. Until
+/// that session exists, Mumble owns the source PCM and this plugin leaves it
+/// untouched so ordinary Mumble conversations keep working.
+pub fn set_acre_active(active: bool) {
+    if let Some(audio) = AUDIO.get() {
+        audio.acre_active.store(active, Ordering::Release);
+    }
+}
 /// Enables or disables ACRE's global voice-renderer override. The pipe worker
 /// updates this atomically through the main-thread runtime; the callback only
 /// performs the lock-free load and silences speech while the override is set.
@@ -93,14 +105,18 @@ pub fn set_sound_system_override(enabled: bool) {
             .store(enabled, Ordering::Release);
     }
 }
-pub fn process(id: u32, samples: &mut [f32], channels: usize, rate: u32) {
+/// Returns whether ACRE modified `samples`. Returning `false` allows Mumble to
+/// keep its original source audio unchanged.
+pub fn process(id: u32, samples: &mut [f32], channels: usize, rate: u32) -> bool {
     let Some(audio) = AUDIO.get() else {
-        samples.fill(0.0);
-        return;
+        return false;
+    };
+    if !audio.acre_active.load(Ordering::Acquire) {
+        return false;
     };
     if audio.sound_system_override.load(Ordering::Acquire) {
         samples.fill(0.0);
-        return;
+        return true;
     }
     let now = Instant::now();
     let peers = audio.peers.load_full();
@@ -109,17 +125,17 @@ pub fn process(id: u32, samples: &mut [f32], channels: usize, rate: u32) {
         .is_none_or(|at| now.saturating_duration_since(*at) >= crate::control::LEASE)
     {
         samples.fill(0.0);
-        return;
+        return true;
     }
     let snapshot = audio.decisions.load_full();
     let Some(speaker) = snapshot.speaker(id) else {
         samples.fill(0.0);
-        return;
+        return true;
     };
     let slot = &audio.slots[id as usize % audio.slots.len()];
     if slot.busy.swap(true, Ordering::Acquire) {
         samples.fill(0.0);
-        return;
+        return true;
     }
     struct Release<'a>(&'a AtomicBool);
     impl Drop for Release<'_> {
@@ -196,6 +212,7 @@ pub fn process(id: u32, samples: &mut [f32], channels: usize, rate: u32) {
     if !modified {
         samples.fill(0.0);
     }
+    true
 }
 
 #[cfg(test)]
@@ -205,7 +222,9 @@ mod tests {
     use std::{sync::Arc, time::Duration};
     #[test]
     fn integrated_audio_requires_peer_lease_and_acre_decision_without_allocating() {
+        let _guard = TEST_LOCK.lock().unwrap();
         init();
+        set_acre_active(true);
         set_sound_system_override(false);
         let audio = get();
         let id = 9001;
@@ -276,11 +295,14 @@ mod tests {
         pcm.fill(0.2);
         process(id, &mut pcm, 2, 48000);
         assert!(pcm.iter().all(|v| *v == 0.0));
+        set_acre_active(false);
     }
 
     #[test]
     fn sound_system_override_silences_speech_without_mutating_the_snapshot() {
+        let _guard = TEST_LOCK.lock().unwrap();
         init();
+        set_acre_active(true);
         let audio = get();
         let id = 9002;
         audio
@@ -301,6 +323,22 @@ mod tests {
         let mut pcm = [0.2; 16];
         process(id, &mut pcm, 2, 48000);
         assert!(pcm.iter().all(|sample| *sample == 0.0));
+        set_sound_system_override(false);
+        set_acre_active(false);
+    }
+
+    #[test]
+    fn normal_mumble_audio_is_untouched_until_acre_is_active() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        init();
+        set_acre_active(false);
+        // The live-session gate must run before a stale override can mute
+        // ordinary Mumble speech after an ACRE disconnect.
+        set_sound_system_override(true);
+        let original = [0.2, -0.3, 0.4, -0.5];
+        let mut pcm = original;
+        assert!(!process(9003, &mut pcm, 2, 48_000));
+        assert_eq!(pcm, original);
         set_sound_system_override(false);
     }
 }

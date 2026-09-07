@@ -9,6 +9,7 @@ use crate::{
 use mumbleacre_acre::*;
 use std::{
     collections::VecDeque,
+    ffi::CStr,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -27,6 +28,28 @@ static RUNTIME: Mutex<Option<Runtime>> = Mutex::new(None);
 // Mumble channel. An explicit value remains available for deployments that
 // want to isolate a group beyond that channel boundary.
 const DEFAULT_SCOPE: &str = "mumble-channel";
+const ACRE_CHANNEL: &CStr = c"ACRE";
+
+fn audio_rendering_should_be_active(acre_connected: bool, has_mumble_context: bool) -> bool {
+    acre_connected && has_mumble_context
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChannelMoveIdentity {
+    connection: i32,
+    local: u32,
+    server: String,
+}
+
+impl From<&ffi::Context> for ChannelMoveIdentity {
+    fn from(context: &ffi::Context) -> Self {
+        Self {
+            connection: context.connection,
+            local: context.local,
+            server: context.server.clone(),
+        }
+    }
+}
 
 struct Runtime {
     adapter: AcreAdapterRuntime,
@@ -41,6 +64,8 @@ struct Runtime {
     active: Option<Transmission>,
     native_talking: bool,
     connected: bool,
+    audio_rendering_active: bool,
+    channel_move_attempted_for: Option<ChannelMoveIdentity>,
     last_send: Instant,
     dirty: bool,
     mic: bool,
@@ -82,6 +107,9 @@ pub fn start() -> Result<(), String> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clear();
     OVERFLOW.store(false, Ordering::Release);
+    // A plugin reload may retain the audio singleton while ACRE has not
+    // reconnected yet. Start fail-open for regular Mumble voice.
+    audio::set_acre_active(false);
     let generation = u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -103,6 +131,8 @@ pub fn start() -> Result<(), String> {
         active: None,
         native_talking: false,
         connected: false,
+        audio_rendering_active: false,
+        channel_move_attempted_for: None,
         last_send: Instant::now(),
         dirty: true,
         mic: false,
@@ -173,6 +203,7 @@ impl Runtime {
         self.dirty = true;
         self.sound_system_override = false;
         self.locally_muted = false;
+        audio::set_acre_active(false);
         audio::set_sound_system_override(false);
         if ffi::microphone(false) {
             self.mic = false;
@@ -183,6 +214,20 @@ impl Runtime {
 
     fn voice_is_suppressed(&self) -> bool {
         self.sound_system_override || self.locally_muted
+    }
+
+    fn update_audio_rendering_gate(&mut self) {
+        let active = audio_rendering_should_be_active(self.connected, self.context.is_some());
+        audio::set_acre_active(active);
+        if active == self.audio_rendering_active {
+            return;
+        }
+        self.audio_rendering_active = active;
+        ffi::log(if active {
+            "MumbleACRE: filtrado de audio ACRE activo"
+        } else {
+            "MumbleACRE: audio normal de Mumble activo; esperando ACRE y contexto Mumble"
+        });
     }
 
     fn suppress_local_microphone(&mut self) {
@@ -250,6 +295,37 @@ impl Runtime {
         }
         self.direct = direct;
     }
+
+    fn request_acre_channel_move(&mut self) {
+        let Some(context) = self.context.as_ref() else {
+            return;
+        };
+        let identity = ChannelMoveIdentity::from(context);
+        if !self.connected || self.channel_move_attempted_for.as_ref() == Some(&identity) {
+            return;
+        }
+
+        // A channel change resets the ACRE pipe. Record this before issuing the
+        // request so that reconnecting that pipe cannot loop on the same server.
+        self.channel_move_attempted_for = Some(identity);
+        match ffi::request_move_to_exact_channel(context, ACRE_CHANNEL) {
+            Ok(ffi::ChannelMove::AlreadyInChannel) => {
+                ffi::log("MumbleACRE: canal ACRE exacto 'ACRE' ya activo");
+            }
+            Ok(ffi::ChannelMove::Requested) => {
+                ffi::log("MumbleACRE: solicitando cambio al canal ACRE exacto 'ACRE'");
+            }
+            Err(ffi::MUMBLE_EC_CHANNEL_NOT_FOUND) => {
+                ffi::log("MumbleACRE: no existe el canal exacto 'ACRE'; no se cambió de canal");
+            }
+            Err(status) => {
+                ffi::log(&format!(
+                    "MumbleACRE: no se pudo solicitar el canal exacto 'ACRE' (Mumble error {status})"
+                ));
+            }
+        }
+    }
+
     fn tick(&mut self) {
         let now = Instant::now();
         if self.mic
@@ -399,13 +475,18 @@ impl Runtime {
                 AcreAdapterEvent::RejectedMessage(_) | AcreAdapterEvent::PipeError(_) => {}
             }
         }
+        self.request_acre_channel_move();
         self.refresh_direct();
         if self.connected && !self.adapter.healthy() {
             self.reset();
             self.connected = false;
             self.adapter.request_reset();
-            ffi::log("MumbleACRE: ACRE dejó de responder; audio silenciado");
+            ffi::log("MumbleACRE: ACRE dejó de responder; audio normal de Mumble restaurado");
         }
+        // ACRE may control PCM only after both sides of the session are live.
+        // Any pipe loss, Mumble context loss, or reset fails open to Mumble's
+        // unmodified source audio instead of muting the user's conversation.
+        self.update_audio_rendering_gate();
         let inputs = std::mem::take(
             &mut *INPUT
                 .lock()
@@ -490,5 +571,53 @@ impl Runtime {
             }
             self.dirty = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acre_channel_name_is_uppercase_and_exact() {
+        assert_eq!(ACRE_CHANNEL.to_bytes(), b"ACRE");
+    }
+
+    #[test]
+    fn channel_move_identity_ignores_channel_but_tracks_mumble_endpoint() {
+        let first = ffi::Context {
+            connection: 7,
+            local: 42,
+            channel: 1,
+            users: vec![],
+            server: "server-a".into(),
+            name: "lobby".into(),
+        };
+        let same_endpoint_other_channel = ffi::Context {
+            channel: 2,
+            name: "acre".into(),
+            ..first.clone()
+        };
+        let other_endpoint = ffi::Context {
+            server: "server-b".into(),
+            ..first.clone()
+        };
+
+        assert_eq!(
+            ChannelMoveIdentity::from(&first),
+            ChannelMoveIdentity::from(&same_endpoint_other_channel)
+        );
+        assert_ne!(
+            ChannelMoveIdentity::from(&first),
+            ChannelMoveIdentity::from(&other_endpoint)
+        );
+    }
+
+    #[test]
+    fn audio_gate_requires_both_acre_pipe_and_mumble_context() {
+        assert!(!audio_rendering_should_be_active(false, false));
+        assert!(!audio_rendering_should_be_active(false, true));
+        assert!(!audio_rendering_should_be_active(true, false));
+        assert!(audio_rendering_should_be_active(true, true));
     }
 }
