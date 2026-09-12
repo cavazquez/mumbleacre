@@ -225,6 +225,27 @@ struct Api {
     play: MumbleFnPlaySample,
 }
 static API: Mutex<Option<Api>> = Mutex::new(None);
+
+/// The two Mumble API calls involved in a local channel move. Keeping this
+/// small prefix separate makes the real API contract executable in unit tests
+/// without installing or mutating a Mumble plugin instance.
+#[derive(Clone, Copy)]
+struct ChannelMoveApi {
+    id: mumble_plugin_id_t,
+    move_user: MumbleFnRequestUserMove,
+    find_channel: MumbleFnFindChannelByName,
+}
+
+impl From<Api> for ChannelMoveApi {
+    fn from(api: Api) -> Self {
+        Self {
+            id: api.id,
+            move_user: api.move_user,
+            find_channel: api.find_channel,
+        }
+    }
+}
+
 fn api() -> Option<Api> {
     *API.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -351,11 +372,21 @@ pub fn request_move_to_exact_channel(
     context: &Context,
     channel_name: &CStr,
 ) -> Result<ChannelMove, mumble_error_t> {
-    let a = api().ok_or(MUMBLE_EC_GENERIC_ERROR)?;
+    let api = api()
+        .map(ChannelMoveApi::from)
+        .ok_or(MUMBLE_EC_GENERIC_ERROR)?;
+    request_move_to_exact_channel_with_api(api, context, channel_name)
+}
+
+fn request_move_to_exact_channel_with_api(
+    api: ChannelMoveApi,
+    context: &Context,
+    channel_name: &CStr,
+) -> Result<ChannelMove, mumble_error_t> {
     let mut target_channel = 0;
     let lookup = unsafe {
-        (a.find_channel)(
-            a.id,
+        (api.find_channel)(
+            api.id,
             context.connection,
             channel_name.as_ptr(),
             &mut target_channel,
@@ -364,12 +395,34 @@ pub fn request_move_to_exact_channel(
     if lookup != MUMBLE_STATUS_OK {
         return Err(lookup);
     }
+
+    request_move_to_channel_with_api(api, context, target_channel)
+}
+
+/// Requests that the local user move to a known channel ID on the current
+/// Mumble connection. This is used to restore the channel the user occupied
+/// before MumbleACRE joined its exact `ACRE` channel.
+pub fn request_move_to_channel(
+    context: &Context,
+    target_channel: mumble_channelid_t,
+) -> Result<ChannelMove, mumble_error_t> {
+    let api = api()
+        .map(ChannelMoveApi::from)
+        .ok_or(MUMBLE_EC_GENERIC_ERROR)?;
+    request_move_to_channel_with_api(api, context, target_channel)
+}
+
+fn request_move_to_channel_with_api(
+    api: ChannelMoveApi,
+    context: &Context,
+    target_channel: mumble_channelid_t,
+) -> Result<ChannelMove, mumble_error_t> {
     if target_channel == context.channel {
         return Ok(ChannelMove::AlreadyInChannel);
     }
     let requested = unsafe {
-        (a.move_user)(
-            a.id,
+        (api.move_user)(
+            api.id,
             context.connection,
             context.local,
             target_channel,
@@ -592,6 +645,89 @@ pub unsafe extern "C" fn mumble_onAudioInput(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{LazyLock, Mutex};
+
+    #[derive(Clone, Default)]
+    struct FakeChannelMoveApi {
+        lookup_status: mumble_error_t,
+        target_channel: mumble_channelid_t,
+        move_status: mumble_error_t,
+        lookup_name: Vec<u8>,
+        moves: Vec<(mumble_connection_t, mumble_userid_t, mumble_channelid_t)>,
+    }
+
+    static FAKE_CHANNEL_MOVE_API: LazyLock<Mutex<FakeChannelMoveApi>> =
+        LazyLock::new(|| Mutex::new(FakeChannelMoveApi::default()));
+    static FAKE_CHANNEL_MOVE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    unsafe extern "C" fn fake_find_channel_by_name(
+        _caller_id: mumble_plugin_id_t,
+        _connection: mumble_connection_t,
+        channel_name: *const c_char,
+        channel_id: *mut mumble_channelid_t,
+    ) -> mumble_error_t {
+        let mut fake = FAKE_CHANNEL_MOVE_API
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        fake.lookup_name = if channel_name.is_null() {
+            Vec::new()
+        } else {
+            unsafe { CStr::from_ptr(channel_name) }.to_bytes().to_vec()
+        };
+        if !channel_id.is_null() {
+            unsafe { *channel_id = fake.target_channel };
+        }
+        fake.lookup_status
+    }
+
+    unsafe extern "C" fn fake_request_user_move(
+        _caller_id: mumble_plugin_id_t,
+        connection: mumble_connection_t,
+        user_id: mumble_userid_t,
+        channel_id: mumble_channelid_t,
+        _password: *const c_char,
+    ) -> mumble_error_t {
+        let mut fake = FAKE_CHANNEL_MOVE_API
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        fake.moves.push((connection, user_id, channel_id));
+        fake.move_status
+    }
+
+    fn fake_channel_move_api() -> ChannelMoveApi {
+        ChannelMoveApi {
+            id: 77,
+            move_user: fake_request_user_move,
+            find_channel: fake_find_channel_by_name,
+        }
+    }
+
+    fn test_context(channel: mumble_channelid_t) -> Context {
+        Context {
+            connection: 8,
+            local: 42,
+            channel,
+            users: vec![],
+            server: "test-server".to_owned(),
+            name: "Lobby".to_owned(),
+        }
+    }
+
+    fn configure_fake_channel_move(
+        lookup_status: mumble_error_t,
+        target_channel: mumble_channelid_t,
+        move_status: mumble_error_t,
+    ) {
+        *FAKE_CHANNEL_MOVE_API
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = FakeChannelMoveApi {
+            lookup_status,
+            target_channel,
+            move_status,
+            ..FakeChannelMoveApi::default()
+        };
+    }
+
     #[test]
     fn api_layout() {
         let p = std::mem::size_of::<usize>();
@@ -603,6 +739,90 @@ mod tests {
         assert_eq!(std::mem::offset_of!(MumbleAPI, send_data), 35 * p);
         assert_eq!(std::mem::offset_of!(MumbleAPI, play_sample), 37 * p);
         assert_eq!(std::mem::size_of::<MumbleAPI>(), 38 * p);
+    }
+
+    #[test]
+    fn exact_channel_move_uses_mumble_lookup_then_moves_the_local_user() {
+        let _guard = FAKE_CHANNEL_MOVE_TEST_LOCK.lock().unwrap();
+        configure_fake_channel_move(MUMBLE_STATUS_OK, 19, MUMBLE_STATUS_OK);
+
+        assert_eq!(
+            request_move_to_exact_channel_with_api(
+                fake_channel_move_api(),
+                &test_context(3),
+                c"ACRE"
+            ),
+            Ok(ChannelMove::Requested)
+        );
+
+        let fake = FAKE_CHANNEL_MOVE_API
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(fake.lookup_name, b"ACRE");
+        assert_eq!(fake.moves, vec![(8, 42, 19)]);
+    }
+
+    #[test]
+    fn exact_channel_move_does_not_request_a_move_when_already_there() {
+        let _guard = FAKE_CHANNEL_MOVE_TEST_LOCK.lock().unwrap();
+        configure_fake_channel_move(MUMBLE_STATUS_OK, 19, MUMBLE_STATUS_OK);
+
+        assert_eq!(
+            request_move_to_exact_channel_with_api(
+                fake_channel_move_api(),
+                &test_context(19),
+                c"ACRE"
+            ),
+            Ok(ChannelMove::AlreadyInChannel)
+        );
+
+        let fake = FAKE_CHANNEL_MOVE_API
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(fake.lookup_name, b"ACRE");
+        assert!(fake.moves.is_empty());
+    }
+
+    #[test]
+    fn exact_channel_move_stops_when_mumble_cannot_find_the_channel() {
+        let _guard = FAKE_CHANNEL_MOVE_TEST_LOCK.lock().unwrap();
+        configure_fake_channel_move(MUMBLE_EC_CHANNEL_NOT_FOUND, 0, MUMBLE_STATUS_OK);
+
+        assert_eq!(
+            request_move_to_exact_channel_with_api(
+                fake_channel_move_api(),
+                &test_context(3),
+                c"ACRE"
+            ),
+            Err(MUMBLE_EC_CHANNEL_NOT_FOUND)
+        );
+
+        let fake = FAKE_CHANNEL_MOVE_API
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(fake.lookup_name, b"ACRE");
+        assert!(fake.moves.is_empty());
+    }
+
+    #[test]
+    fn returning_to_a_known_channel_surfaces_a_mumble_permission_error() {
+        let _guard = FAKE_CHANNEL_MOVE_TEST_LOCK.lock().unwrap();
+        configure_fake_channel_move(MUMBLE_STATUS_OK, 0, -55);
+
+        assert_eq!(
+            request_move_to_channel_with_api(fake_channel_move_api(), &test_context(19), 3),
+            Err(-55)
+        );
+
+        let fake = FAKE_CHANNEL_MOVE_API
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert!(fake.lookup_name.is_empty());
+        assert_eq!(fake.moves, vec![(8, 42, 3)]);
     }
 
     #[test]

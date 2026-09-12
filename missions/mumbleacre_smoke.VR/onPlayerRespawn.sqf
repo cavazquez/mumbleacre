@@ -9,8 +9,4 @@ if (!hasInterface) exitWith {};
 
 [] call MumbleACRE_ACRE_fnc_setupMission;
 
-_newUnit addItem "ACRE_PRC152";
-if ((backpack _newUnit) isEqualTo "") then {
-    _newUnit addBackpack "B_AssaultPack_khk";
-};
-_newUnit addItemToBackpack "ACRE_PRC117F";
+[_newUnit] execVM "giveTestRadios.sqf";

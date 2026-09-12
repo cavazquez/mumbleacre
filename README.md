@@ -32,8 +32,10 @@ con dos clientes Windows y Arma.
 4. Crear en el servidor Mumble un canal llamado exactamente `ACRE` (en
    mayúsculas) y dar a los jugadores permiso para entrar. Al conectarse ACRE,
    el plugin busca ese nombre con coincidencia exacta —`acre`, `ACRE 1` y
-   cualquier nombre que sólo lo contenga no sirven— y solicita que Mumble mueva al usuario local. No usa
-   contraseña de canal ni cambia grupos. El plugin usa el canal Mumble activo
+   cualquier nombre que sólo lo contenga no sirven— y solicita que Mumble mueva al usuario local. Al cerrar
+   Arma o perder el pipe ACRE, vuelve al canal en el que estaba antes de ese
+   cambio automático. `diagnose-mumbleacre.ps1` registra y muestra la última
+   acción de canal. No usa contraseña de canal ni cambia grupos. El plugin usa el canal Mumble activo
    como límite de la partida, así que no requiere un identificador de misión:
 
    ```powershell
@@ -50,8 +52,10 @@ con dos clientes Windows y Arma.
    usuario pueda entrar. El servidor dedicado de Arma sólo necesita CBA + ACRE
    y los mods de la misión. El backend se instala en cada cliente.
 6. Para la fixture, cargar también `@mumbleacre` y copiar
-   `missions/mumbleacre_smoke.VR` a las misiones de Arma. El addon sólo agrega
-   presets de misión y es opcional para misiones ACRE existentes.
+   `missions/mumbleacre_smoke.VR` a las misiones de Arma. Tras iniciar, la
+   misión confirma en el chat que entregó una PRC-152 en C1 (y una PRC-117F en
+   la mochila); si no lo hace, ACRE2 no está cargado correctamente. El addon
+   sólo agrega presets de misión y es opcional para misiones ACRE existentes.
 
 La voz directa usa el PTT/VAD de Mumble; radio e intercom usan las teclas de
 ACRE. Fuera de una sesión ACRE conectada, el plugin deja pasar el audio normal

@@ -115,7 +115,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "mumbleacre-acre"
-version = "0.1.9"
+version = "0.1.12"
 dependencies = [
  "proptest",
  "serde",
@@ -127,11 +127,11 @@ dependencies = [
 
 [[package]]
 name = "mumbleacre-logging"
-version = "0.1.9"
+version = "0.1.12"
 
 [[package]]
 name = "mumbleacre-plugin"
-version = "0.1.9"
+version = "0.1.12"
 dependencies = [
  "arc-swap",
  "hound",

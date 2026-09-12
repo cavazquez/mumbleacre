@@ -22,8 +22,10 @@ reemplaza la prueba real de voz.
    Medir primera voz audible y comparar con el backend oficial.
 4. Vehículo con intercom, entrada/salida, Babel, muerte/inconsciencia,
    respawn, JIP, transferencia de unidad y cambios de misión.
-5. Cerrar Arma, reiniciar el plugin, desconectar pipes/servidor y cambiar canal.
-   Confirmar que se libera el micrófono, se silencia estado viejo y reconecta.
+5. Entrar desde otro canal Mumble, cerrar Arma y esperar el aviso de pipe
+   desconectado. Confirmar que se libera el micrófono, se silencia estado viejo
+   y el plugin regresa al canal anterior. Repetir con un usuario que ya estaba
+   manualmente en `ACRE`: en ese caso debe quedarse allí.
 6. Bajar intencionalmente rate limit o bloquear control: confirmar caducidad
    de TX, ausencia de micrófono pegado y recuperación con estado completo.
 7. Cliente sin plugin/versión incorrecta: verificar rechazo local del control

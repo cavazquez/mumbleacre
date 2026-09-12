@@ -46,6 +46,7 @@ for file in \
     "$MISSION/init.sqf" \
     "$MISSION/initPlayerLocal.sqf" \
     "$MISSION/onPlayerRespawn.sqf" \
+    "$MISSION/giveTestRadios.sqf" \
     "$DOC"; do
     require_file "$file"
 done
@@ -109,9 +110,10 @@ else
     require_text "$MISSION/init.sqf" 'MumbleACRE_ACRE_fnc_configurePresets' "init.sqf registra presets en todos los nodos"
     for file in initPlayerLocal.sqf onPlayerRespawn.sqf; do
         require_text "$MISSION/$file" 'MumbleACRE_ACRE_fnc_setupMission' "$file reconfigura la unidad local"
-        require_text "$MISSION/$file" 'ACRE_PRC152' "$file entrega PRC-152 ACRE"
-        require_text "$MISSION/$file" 'ACRE_PRC117F' "$file entrega PRC-117F ACRE"
+        require_text "$MISSION/$file" 'giveTestRadios.sqf' "$file entrega radios de la fixture"
     done
+    require_text "$MISSION/giveTestRadios.sqf" 'ACRE_PRC152' "Fixture entrega PRC-152 ACRE"
+    require_text "$MISSION/giveTestRadios.sqf" 'ACRE_PRC117F' "Fixture entrega PRC-117F ACRE"
     if rg -nF 'MumbleACRE_R' "$MISSION" >/dev/null; then
         fail "La fixture ACRE no puede incluir radios MumbleACRE legadas"
     else

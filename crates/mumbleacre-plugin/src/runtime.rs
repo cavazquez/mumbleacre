@@ -7,6 +7,7 @@ use crate::{
     ffi,
 };
 use mumbleacre_acre::*;
+use mumbleacre_logging::LogLevel;
 use std::{
     collections::VecDeque,
     ffi::CStr,
@@ -29,6 +30,7 @@ static RUNTIME: Mutex<Option<Runtime>> = Mutex::new(None);
 // want to isolate a group beyond that channel boundary.
 const DEFAULT_SCOPE: &str = "mumble-channel";
 const ACRE_CHANNEL: &CStr = c"ACRE";
+const ACRE_CHANNEL_NAME: &str = "ACRE";
 
 fn audio_rendering_should_be_active(acre_connected: bool, has_mumble_context: bool) -> bool {
     acre_connected && has_mumble_context
@@ -51,8 +53,44 @@ impl From<&ffi::Context> for ChannelMoveIdentity {
     }
 }
 
+/// The original Mumble channel is retained only for a session which the
+/// plugin itself moved to `ACRE`. A user who was already in `ACRE` remains
+/// there when Arma closes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReturnChannel {
+    endpoint: ChannelMoveIdentity,
+    channel: ffi::mumble_channelid_t,
+}
+
+impl From<&ffi::Context> for ReturnChannel {
+    fn from(context: &ffi::Context) -> Self {
+        Self {
+            endpoint: ChannelMoveIdentity::from(context),
+            channel: context.channel,
+        }
+    }
+}
+
+fn context_is_exact_acre_channel(context: &ffi::Context) -> bool {
+    context.name == ACRE_CHANNEL_NAME
+}
+
+fn can_return_from_acre_channel(
+    return_channel: Option<&ReturnChannel>,
+    return_channel_armed: bool,
+    context: Option<&ffi::Context>,
+) -> bool {
+    let (Some(return_channel), Some(context)) = (return_channel, context) else {
+        return false;
+    };
+    return_channel_armed
+        && return_channel.endpoint == ChannelMoveIdentity::from(context)
+        && context_is_exact_acre_channel(context)
+}
+
 struct Runtime {
     adapter: AcreAdapterRuntime,
+    log: crate::SharedLog,
     timer: Option<Timer>,
     scope: String,
     generation: u64,
@@ -66,6 +104,8 @@ struct Runtime {
     connected: bool,
     audio_rendering_active: bool,
     channel_move_attempted_for: Option<ChannelMoveIdentity>,
+    return_channel: Option<ReturnChannel>,
+    return_channel_armed: bool,
     last_send: Instant,
     dirty: bool,
     mic: bool,
@@ -101,7 +141,7 @@ pub fn start() -> Result<(), String> {
         mumbleacre_logging::EventLog::open(log_path, "plugin", mumbleacre_logging::LogLevel::Info)
             .map(|log| Arc::new(Mutex::new(log)))
             .map_err(|e| format!("could not open diagnostic log: {e}"))?;
-    let adapter = AcreAdapterRuntime::start(Some(log))?;
+    let adapter = AcreAdapterRuntime::start(Some(Arc::clone(&log)))?;
     INPUT
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -120,6 +160,7 @@ pub fn start() -> Result<(), String> {
     let timer = Some(Timer::start()?);
     *runtime = Some(Runtime {
         adapter,
+        log,
         timer,
         scope,
         generation,
@@ -133,6 +174,8 @@ pub fn start() -> Result<(), String> {
         connected: false,
         audio_rendering_active: false,
         channel_move_attempted_for: None,
+        return_channel: None,
+        return_channel_armed: false,
         last_send: Instant::now(),
         dirty: true,
         mic: false,
@@ -180,6 +223,10 @@ pub(crate) fn tick() {
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(runtime);
 }
 impl Runtime {
+    fn log_channel_event(&self, level: LogLevel, event: &str, message: &str) {
+        crate::write_event(Some(&self.log), level, event, message);
+    }
+
     fn reset(&mut self) {
         crate::capture::close();
         let actions = self.ptt.reset();
@@ -310,17 +357,114 @@ impl Runtime {
         self.channel_move_attempted_for = Some(identity);
         match ffi::request_move_to_exact_channel(context, ACRE_CHANNEL) {
             Ok(ffi::ChannelMove::AlreadyInChannel) => {
+                self.log_channel_event(
+                    LogLevel::Info,
+                    "mumble_channel_join_not_needed",
+                    "target=ACRE reason=already_in_exact_channel",
+                );
                 ffi::log("MumbleACRE: canal ACRE exacto 'ACRE' ya activo");
             }
             Ok(ffi::ChannelMove::Requested) => {
+                self.return_channel = Some(ReturnChannel::from(context));
+                self.return_channel_armed = false;
+                self.log_channel_event(
+                    LogLevel::Info,
+                    "mumble_channel_join_requested",
+                    &format!("from_channel_id={} target=ACRE", context.channel),
+                );
                 ffi::log("MumbleACRE: solicitando cambio al canal ACRE exacto 'ACRE'");
             }
             Err(ffi::MUMBLE_EC_CHANNEL_NOT_FOUND) => {
+                self.log_channel_event(
+                    LogLevel::Warn,
+                    "mumble_channel_join_failed",
+                    "target=ACRE reason=channel_not_found",
+                );
                 ffi::log("MumbleACRE: no existe el canal exacto 'ACRE'; no se cambió de canal");
             }
             Err(status) => {
+                self.log_channel_event(
+                    LogLevel::Warn,
+                    "mumble_channel_join_failed",
+                    &format!("target=ACRE mumble_error={status}"),
+                );
                 ffi::log(&format!(
                     "MumbleACRE: no se pudo solicitar el canal exacto 'ACRE' (Mumble error {status})"
+                ));
+            }
+        }
+    }
+
+    fn arm_return_channel_if_back_in_acre(&mut self) {
+        if self.return_channel.is_some()
+            && self
+                .context
+                .as_ref()
+                .is_some_and(context_is_exact_acre_channel)
+            && !self.return_channel_armed
+        {
+            self.return_channel_armed = true;
+            self.log_channel_event(LogLevel::Info, "mumble_channel_return_armed", "source=ACRE");
+        }
+    }
+
+    fn return_from_acre_channel(&mut self) {
+        let can_return = can_return_from_acre_channel(
+            self.return_channel.as_ref(),
+            self.return_channel_armed,
+            self.context.as_ref(),
+        );
+        // Mumble resets the ACRE pipes while completing the automatic channel
+        // move. Until a later PipeConnected observed us inside `ACRE`, that
+        // disconnect is transitional and must retain the return target.
+        if !self.return_channel_armed {
+            if self.return_channel.is_some() {
+                self.log_channel_event(
+                    LogLevel::Info,
+                    "mumble_channel_return_deferred",
+                    "reason=automatic_channel_change_in_progress",
+                );
+            }
+            return;
+        }
+
+        let return_channel = self.return_channel.take();
+        self.return_channel_armed = false;
+        self.channel_move_attempted_for = None;
+
+        let (Some(return_channel), Some(context)) = (return_channel, self.context.as_ref()) else {
+            return;
+        };
+        if !can_return {
+            self.log_channel_event(
+                LogLevel::Info,
+                "mumble_channel_return_skipped",
+                "reason=not_in_exact_acre_channel_or_endpoint_changed",
+            );
+            return;
+        }
+
+        match ffi::request_move_to_channel(context, return_channel.channel) {
+            Ok(ffi::ChannelMove::AlreadyInChannel) => {}
+            Ok(ffi::ChannelMove::Requested) => {
+                self.log_channel_event(
+                    LogLevel::Info,
+                    "mumble_channel_return_requested",
+                    &format!("to_channel_id={}", return_channel.channel),
+                );
+                ffi::log("MumbleACRE: ACRE desconectado; regresando al canal Mumble anterior");
+            }
+            Err(status) => {
+                self.log_channel_event(
+                    LogLevel::Warn,
+                    "mumble_channel_return_failed",
+                    &format!(
+                        "to_channel_id={} mumble_error={status}",
+                        return_channel.channel
+                    ),
+                );
+                ffi::log(&format!(
+                    "MumbleACRE: ACRE desconectado; no se pudo regresar al canal anterior (Mumble error {status})"
                 ));
             }
         }
@@ -346,6 +490,14 @@ impl Runtime {
             _ => true,
         };
         if changed {
+            if self.context.as_ref().is_some_and(|previous| {
+                context.as_ref().is_none_or(|current| {
+                    ChannelMoveIdentity::from(previous) != ChannelMoveIdentity::from(current)
+                })
+            }) {
+                self.return_channel = None;
+                self.return_channel_armed = false;
+            }
             self.reset();
             self.connected = false;
             self.adapter.request_reset();
@@ -407,14 +559,17 @@ impl Runtime {
             match event {
                 AcreAdapterEvent::PipeConnected => {
                     self.connected = true;
+                    self.arm_return_channel_if_back_in_acre();
                     ffi::log("MumbleACRE: ACRE conectado");
                 }
                 AcreAdapterEvent::PipeDisconnected => {
+                    self.return_from_acre_channel();
                     self.reset();
                     self.connected = false;
                 }
                 AcreAdapterEvent::ResetRequested => self.reset(),
                 AcreAdapterEvent::QueueOverflow => {
+                    self.return_from_acre_channel();
                     self.reset();
                     self.connected = false;
                     self.adapter.request_reset();
@@ -478,6 +633,7 @@ impl Runtime {
         self.request_acre_channel_move();
         self.refresh_direct();
         if self.connected && !self.adapter.healthy() {
+            self.return_from_acre_channel();
             self.reset();
             self.connected = false;
             self.adapter.request_reset();
@@ -581,6 +737,7 @@ mod tests {
     #[test]
     fn acre_channel_name_is_uppercase_and_exact() {
         assert_eq!(ACRE_CHANNEL.to_bytes(), b"ACRE");
+        assert_eq!(ACRE_CHANNEL_NAME, "ACRE");
     }
 
     #[test]
@@ -611,6 +768,49 @@ mod tests {
             ChannelMoveIdentity::from(&first),
             ChannelMoveIdentity::from(&other_endpoint)
         );
+    }
+
+    #[test]
+    fn return_to_previous_channel_requires_an_armed_exact_acre_session() {
+        let original = ffi::Context {
+            connection: 7,
+            local: 42,
+            channel: 3,
+            users: vec![],
+            server: "server-a".into(),
+            name: "Lobby".into(),
+        };
+        let acre = ffi::Context {
+            channel: 9,
+            name: "ACRE".into(),
+            ..original.clone()
+        };
+        let different_server = ffi::Context {
+            server: "server-b".into(),
+            ..acre.clone()
+        };
+        let return_channel = ReturnChannel::from(&original);
+
+        assert!(!can_return_from_acre_channel(
+            Some(&return_channel),
+            false,
+            Some(&acre)
+        ));
+        assert!(!can_return_from_acre_channel(
+            Some(&return_channel),
+            true,
+            Some(&original)
+        ));
+        assert!(!can_return_from_acre_channel(
+            Some(&return_channel),
+            true,
+            Some(&different_server)
+        ));
+        assert!(can_return_from_acre_channel(
+            Some(&return_channel),
+            true,
+            Some(&acre)
+        ));
     }
 
     #[test]

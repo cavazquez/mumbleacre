@@ -151,6 +151,12 @@ if (!(Test-Path -LiteralPath $PluginLogPath)) {
         if ($null -ne $lastSoundWarning) {
             Write-Status "Latest sound warning" $lastSoundWarning
         }
+        $lastChannelEvent = $activeRun | Where-Object {
+            $_ -match "event=mumble_channel_(join|return)_"
+        } | Select-Object -Last 1
+        if ($null -ne $lastChannelEvent) {
+            Write-Status "Latest channel action" $lastChannelEvent
+        }
         Write-Output ""
         Write-Output ("Last {0} log lines (current Mumble run when available):" -f $LogLines)
         $activeRun
