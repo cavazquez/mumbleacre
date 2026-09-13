@@ -80,6 +80,12 @@ con `addItem` y luego las convierte a IDs propios.
 con reposición en respawn. `scripts/build-windows.sh` crea el PBO en
 `dist/windows-x64/@mumbleacre/addons/mumbleacre_acre.pbo`.
 
+La release `MumbleACRE-<version>-windows-x64.zip` incluye ese addon y la
+fixture dentro de la misma carpeta que el bundle de Mumble. No se versionan
+esos artefactos bajo `dist/`; se generan desde el addon y la misión de este
+repositorio. Ver [Distribución](distribution.md) para empaquetar y comprobar
+los hashes antes de compartirlos.
+
 El addon es opcional para misiones que ya configuran sus radios con ACRE.
 La fixture y el addon deben probarse en Arma real en listen, dedicado, JIP y
 respawn antes de usarlos en una partida. Los contratos SQF usan mocks de la API

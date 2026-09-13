@@ -90,3 +90,12 @@ puede recordar una carga durante toda la sesión de Arma y no volver a enviar el
 WAV al reconectar el plugin. Si aun así pide `Acre_GenericBeep` o los clicks
 genéricos sin reenviar su archivo, el worker genera un pip local centrado. Una
 carga posterior de ACRE reemplaza ese respaldo.
+
+## Artefactos de distribución
+
+El runtime se entrega como DLL dentro del bundle nativo de Mumble y como addon
+PBO opcional para la fixture. Ambos se generan en `dist/windows-x64/` junto con
+un ZIP versionado y `SHA256SUMS`; no forman parte del historial de Git. El
+empaquetado usa entradas ordenadas y timestamps fijos para que, con los mismos
+insumos, el bundle y el ZIP sean reproducibles. El flujo de generación,
+contenido y verificación está documentado en [Distribución](distribution.md).

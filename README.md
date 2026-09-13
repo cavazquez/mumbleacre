@@ -17,9 +17,11 @@ con dos clientes Windows y Arma.
 1. Usar Mumble **1.5.634 o posterior de la rama 1.5**, x64, y ACRE2
    **2.14.0.1064** + CBA_A3 en Arma. Otras versiones de ACRE requieren revisar
    su protocolo privado antes de declararlas compatibles.
-2. Instalar `dist/windows-x64/MumbleACRE.mumble_plugin` desde las opciones de
-   plugins de Mumble. Cerrar cualquier otro cliente que esté usando ACRE antes
-   de abrir Mumble: los pipes de ACRE sólo pueden tener un propietario.
+2. Para una release, descomprimir `MumbleACRE-<versión>-windows-x64.zip` e
+   instalar `MumbleACRE.mumble_plugin` desde las opciones de plugins de
+   Mumble. Quien compile localmente encontrará el mismo bundle en
+   `dist/windows-x64/`. Cerrar cualquier otro cliente que esté usando ACRE
+   antes de abrir Mumble: los pipes de ACRE sólo pueden tener un propietario.
 3. En el servidor Mumble configurar y reiniciar:
 
    ```ini
@@ -97,10 +99,15 @@ cargo install armake2 --version 0.3.0 --locked
 ./scripts/build-windows.sh
 ```
 
-El build genera DLL, bundle nativo de Mumble, PBO, fixture y `SHA256SUMS` en
-`dist/windows-x64/`. No instala nada automáticamente. Linux sirve para probar
-contratos y DSP; el plugin requiere Windows para conectar los pipes ACRE.
+El build genera DLL, bundle nativo de Mumble, PBO, fixture, `SHA256SUMS` y el
+ZIP instalable `MumbleACRE-<versión>-windows-x64.zip` en `dist/windows-x64/`.
+No instala nada automáticamente. `dist/` es local e ignorado por Git. Linux
+sirve para probar contratos y DSP; el plugin requiere Windows para conectar los
+pipes ACRE.
 El bundle usa el [formato nativo de Mumble](https://github.com/mumble-voip/mumble/blob/master/docs/dev/plugins/Bundling.md).
+
+Para la estructura del ZIP, verificación de hashes y reproducibilidad, ver
+[Distribución](docs/distribution.md).
 
 `check.sh` ejecuta formato, Clippy, pruebas Rust, contratos SQF y compilación
 Windows. SQF-VM se descarga con hash fijado; se puede pasar `SQFVM_BIN` para
@@ -128,4 +135,5 @@ líneas del log. Si `murmur.ini` está en esa misma máquina, agrega
 copia distribuida incluye el mismo script junto a `start-mumble.ps1`.
 
 [Arquitectura y límites](docs/runtime.md) · [Misión](docs/acre-mission-integration.md)
-· [QA pendiente](docs/qa.md) · [Proveniencia y GPL-3.0](NOTICE.md)
+· [QA pendiente](docs/qa.md) · [Distribución](docs/distribution.md)
+· [Proveniencia y GPL-3.0](NOTICE.md)

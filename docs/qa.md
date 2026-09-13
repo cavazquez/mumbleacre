@@ -12,6 +12,12 @@ informar `ACRE pipe: CONNECTED`; el chat de Mumble confirma el filtrado de
 audio ACRE. Es una comprobación local de instalación, pipe y contexto; no
 reemplaza la prueba real de voz.
 
+Cuando se pruebe una release, todos los participantes deben extraer el mismo
+`MumbleACRE-<version>-windows-x64.zip` y verificar `SHA256SUMS` antes de
+instalar. Así se separa un fallo de integración de una DLL/PBO distinta entre
+clientes. El procedimiento de empaquetado y verificación está en
+[Distribución](distribution.md).
+
 1. Dos PCs Windows x64, mismo canal administrado, misma misión y bundle;
    plugin TeamSpeak deshabilitado. Verificar handshake ACRE sin alertas.
 2. Fixture `mumbleacre_smoke.VR`: directo cerca/lejos, giro de cabeza, radio
