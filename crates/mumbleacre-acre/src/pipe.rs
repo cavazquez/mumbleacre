@@ -325,10 +325,9 @@ mod tests {
     }
     #[test]
     fn windows_message_io_reconnect_and_exclusive_ownership() {
-        use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
-        use windows_sys::Win32::Storage::FileSystem::{
-            CreateFileW, FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING,
-        };
+        use windows_sys::Win32::Foundation::{ERROR_PIPE_BUSY, GENERIC_READ, GENERIC_WRITE};
+        use windows_sys::Win32::Storage::FileSystem::{CreateFileW, OPEN_EXISTING};
+        use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
         struct Client(HANDLE);
         impl Drop for Client {
             fn drop(&mut self) {
@@ -338,20 +337,34 @@ mod tests {
             }
         }
         fn open(name: &str) -> Client {
-            let name = wide_nul(name);
-            let handle = unsafe {
-                CreateFileW(
-                    name.as_ptr(),
-                    GENERIC_READ | GENERIC_WRITE,
-                    0,
-                    ptr::null(),
-                    OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL,
-                    ptr::null_mut(),
-                )
-            };
-            assert_ne!(handle, INVALID_HANDLE_VALUE);
-            Client(handle)
+            let wide_name = wide_nul(name);
+            let mut last_error = 0;
+            for _ in 0..20 {
+                let handle = unsafe {
+                    CreateFileW(
+                        wide_name.as_ptr(),
+                        GENERIC_READ | GENERIC_WRITE,
+                        0,
+                        ptr::null(),
+                        OPEN_EXISTING,
+                        0,
+                        ptr::null_mut(),
+                    )
+                };
+                if handle != INVALID_HANDLE_VALUE {
+                    return Client(handle);
+                }
+
+                last_error = unsafe { GetLastError() };
+                if last_error != ERROR_PIPE_BUSY {
+                    break;
+                }
+                if unsafe { WaitNamedPipeW(wide_name.as_ptr(), 100) } == 0 {
+                    last_error = unsafe { GetLastError() };
+                    break;
+                }
+            }
+            panic!("CreateFileW failed for {name:?} with Win32 error {last_error}");
         }
         let mut server = AcrePipePair::create().unwrap();
         assert!(
@@ -359,6 +372,10 @@ mod tests {
             "another backend must not own these pipes"
         );
         for _ in 0..2 {
+            // Put both server handles into their listening state before the
+            // client opens them. This is the normal production order and
+            // avoids relying on the CreateNamedPipe/CreateFile race window.
+            assert!(!server.try_connect().unwrap());
             let reader = open(ACRE_FROM_TS_PIPE);
             let writer = open(ACRE_TO_TS_PIPE);
             assert!(server.try_connect().unwrap());
