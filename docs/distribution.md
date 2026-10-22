@@ -17,6 +17,8 @@ Python 3.11 o superior y `armake2` instalados, ejecutar:
 El script compila el plugin, crea el PBO del addon y llama a
 `scripts/package.py`. También se puede ejecutar este último por separado
 cuando la DLL y el PBO ya existan en `dist/windows-x64/`.
+Este empaquetado separado reutiliza esos binarios: tras cambiar código Rust o
+SQF hay que recompilar antes de ejecutarlo.
 
 La versión procede únicamente de `workspace.package.version` en `Cargo.toml`.
 Para una corrección distribuida se incrementa el último dígito antes de
@@ -41,12 +43,29 @@ a usar la fixture, copia `@mumbleacre` y la misión en su instalación de Arma.
 propio archivo de hashes. El ZIP no se incluye en esa lista porque se verifica
 después de extraerlo.
 
+Cada ejecución crea una carpeta temporal limpia y copia allí los archivos
+actuales de origen, la DLL y el PBO. Las misiones se enumeran desde el código
+fuente. Así, un script eliminado o renombrado no vuelve a entrar en el ZIP por
+haber quedado en `dist/`. Los archivos antiguos de `dist/` se conservan en el
+disco, pero el ZIP y `SHA256SUMS` sólo incluyen el contenido de esa carpeta nueva.
+Si falta un archivo requerido, el empaquetado falla antes de reemplazar la
+release anterior.
+
 ## Reproducibilidad e integridad
 
 Los dos archivos ZIP se escriben con orden de entradas, compresión y timestamps
 fijos. Con DLL, PBO y archivos de origen idénticos, el empaquetado produce el
 mismo resultado. La reproducibilidad de la DLL/PBO depende además del
 compilador y de las herramientas usadas para construirlos.
+
+Las regresiones de empaquetado se ejecutan con Python 3.11 o superior:
+
+```bash
+python3 -B -m unittest discover -s tests -p test_package.py
+```
+
+Comprueban exclusión de archivos antiguos, cobertura de hashes, salida idéntica
+con los mismos insumos y conservación del ZIP anterior si falta un archivo.
 
 Antes de publicar, extraer el ZIP y validar los hashes. En PowerShell, desde la
 carpeta extraída:

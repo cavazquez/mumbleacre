@@ -18,6 +18,17 @@ instalar. Así se separa un fallo de integración de una DLL/PBO distinta entre
 clientes. El procedimiento de empaquetado y verificación está en
 [Distribución](distribution.md).
 
+Regresiones locales de `0.1.13`: con el plugin habilitado y Arma cerrado,
+comprobar que otro usuario oye el micrófono normal de Mumble. Repetir después
+de cerrar Arma y después de una reconexión ACRE. Para los silencios por usuario,
+verificar que al perder el pipe se restauran los cambios de ACRE y se conservan
+los silencios manuales, siempre en la misma conexión Mumble.
+
+Las pruebas automatizadas Windows saturan un pipe real y comprueban que el
+mensaje pendiente se puede reintentar después de vaciarlo. Las pruebas de
+empaquetado reconstruyen sobre un directorio con residuos y validan que los
+archivos antiguos no entren en el ZIP ni en `SHA256SUMS`.
+
 1. Dos PCs Windows x64, mismo canal administrado, misma misión y bundle;
    plugin TeamSpeak deshabilitado. Verificar handshake ACRE sin alertas.
 2. Fixture `mumbleacre_smoke.VR`: directo cerca/lejos, giro de cabeza, radio

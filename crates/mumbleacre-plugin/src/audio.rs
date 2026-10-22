@@ -91,6 +91,7 @@ pub fn mute(id: u32) {
 /// that session exists, Mumble owns the source PCM and this plugin leaves it
 /// untouched so ordinary Mumble conversations keep working.
 pub fn set_acre_active(active: bool) {
+    crate::capture::set_acre_active(active);
     if let Some(audio) = AUDIO.get() {
         audio.acre_active.store(active, Ordering::Release);
     }

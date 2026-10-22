@@ -21,3 +21,4 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: cargo test --locked --workspace
+      - run: python -B -m unittest discover -s tests -p test_package.py

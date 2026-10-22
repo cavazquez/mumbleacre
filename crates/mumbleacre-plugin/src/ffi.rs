@@ -220,6 +220,7 @@ struct Api {
     find_channel: MumbleFnFindChannelByName,
     send: MumbleFnSendData,
     mic: MumbleFnRequestMicrophoneActivationOverwrite,
+    is_muted: MumbleFnIsUserLocallyMuted,
     mute: MumbleFnRequestLocalMute,
     log: MumbleFnLog,
     play: MumbleFnPlaySample,
@@ -356,6 +357,13 @@ pub fn request_local_mute(context: &Context, user_id: u32, muted: bool) -> bool 
     api().is_some_and(|a| unsafe { (a.mute)(a.id, context.connection, user_id, muted) == 0 })
 }
 
+pub fn is_user_locally_muted(context: &Context, user_id: u32) -> Option<bool> {
+    let a = api()?;
+    let mut muted = false;
+    (unsafe { (a.is_muted)(a.id, context.connection, user_id, &raw mut muted) } == 0)
+        .then_some(muted)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChannelMove {
     AlreadyInChannel,
@@ -473,6 +481,7 @@ pub unsafe extern "C" fn mumble_registerAPIFunctions(ptr: *const c_void) {
         find_channel: a.find_channel_by_name,
         send: a.send_data,
         mic: a.request_microphone_activation_overwrite,
+        is_muted: a.is_user_locally_muted,
         mute: a.request_local_mute,
         log: a.log,
         play: a.play_sample,
@@ -868,5 +877,17 @@ mod tests {
             ));
         }
         assert_eq!(pcm, [0.8; 8]);
+        crate::capture::init();
+        let mut microphone_pcm = [1000_i16; 8];
+        unsafe {
+            assert!(!mumble_onAudioInput(
+                microphone_pcm.as_mut_ptr(),
+                4,
+                2,
+                48000,
+                true
+            ));
+        }
+        assert_eq!(microphone_pcm, [1000; 8]);
     }
 }

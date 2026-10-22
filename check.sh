@@ -8,3 +8,4 @@ cargo clippy --locked --workspace --all-targets --target x86_64-pc-windows-gnu -
 ./scripts/verify-acre-addon.sh
 ./scripts/test-acre-addon-sqf.sh
 python3 scripts/verify-tree.py
+python3 -B -m unittest discover -s tests -p test_package.py

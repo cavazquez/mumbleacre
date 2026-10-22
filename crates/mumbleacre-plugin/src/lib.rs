@@ -15,6 +15,8 @@ mod audio;
 mod capture;
 mod control;
 mod ffi;
+#[cfg(windows)]
+mod local_mutes;
 mod publication;
 #[cfg(windows)]
 mod runtime;

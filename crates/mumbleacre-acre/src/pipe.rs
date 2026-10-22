@@ -212,22 +212,28 @@ impl NamedPipe {
                 ptr::null_mut(),
             )
         };
-        if written != 0 && bytes_written as usize == bytes.len() {
-            return Ok(());
+        if written != 0 {
+            // A nonblocking message pipe reports success with zero bytes when
+            // its buffer is full. GetLastError is undefined after success.
+            return if bytes_written as usize == bytes.len() {
+                Ok(())
+            } else if bytes_written == 0 {
+                Err(AcrePipeError::WouldBlock { pipe: self.name })
+            } else {
+                Err(AcrePipeError::ShortWrite {
+                    pipe: self.name,
+                    expected: bytes.len(),
+                    actual: bytes_written as usize,
+                })
+            };
         }
 
         let code = unsafe { GetLastError() };
         match code {
-            ERROR_NO_DATA => Err(AcrePipeError::WouldBlock { pipe: self.name }),
-            ERROR_BROKEN_PIPE => {
+            ERROR_NO_DATA | ERROR_BROKEN_PIPE => {
                 self.disconnect();
                 Err(AcrePipeError::Disconnected { pipe: self.name })
             }
-            _ if written != 0 => Err(AcrePipeError::ShortWrite {
-                pipe: self.name,
-                expected: bytes.len(),
-                actual: bytes_written as usize,
-            }),
             _ => Err(AcrePipeError::System {
                 pipe: self.name,
                 operation: "WriteFile",
@@ -366,9 +372,18 @@ mod tests {
             }
             panic!("CreateFileW failed for {name:?} with Win32 error {last_error}");
         }
-        let mut server = AcrePipePair::create().unwrap();
+        // Exercise real Windows I/O without competing with a running Mumble.
+        const FROM_PIPE: &str = r"\\.\pipe\mumbleacre_test_fromTS";
+        const TO_PIPE: &str = r"\\.\pipe\mumbleacre_test_toTS";
+        let create = || -> Result<AcrePipePair, AcrePipeError> {
+            Ok(AcrePipePair {
+                from_arma: NamedPipe::create(FROM_PIPE)?,
+                to_arma: NamedPipe::create(TO_PIPE)?,
+            })
+        };
+        let mut server = create().unwrap();
         assert!(
-            AcrePipePair::create().is_err(),
+            create().is_err(),
             "another backend must not own these pipes"
         );
         for _ in 0..2 {
@@ -376,8 +391,8 @@ mod tests {
             // client opens them. This is the normal production order and
             // avoids relying on the CreateNamedPipe/CreateFile race window.
             assert!(!server.try_connect().unwrap());
-            let reader = open(ACRE_FROM_TS_PIPE);
-            let writer = open(ACRE_TO_TS_PIPE);
+            let reader = open(FROM_PIPE);
+            let writer = open(TO_PIPE);
             assert!(server.try_connect().unwrap());
             let ping = b"ping:";
             let mut written = 0;
@@ -408,6 +423,53 @@ mod tests {
                         bytes.as_mut_ptr(),
                         bytes.len() as u32,
                         &mut read,
+                        ptr::null_mut(),
+                    )
+                },
+                0
+            );
+            assert_eq!(&bytes[..read as usize], reply.encode_nul_terminated());
+            // Saturate the real message pipe without letting the client read.
+            // Success with zero bytes must preserve the pending reply for retry.
+            let payload = [b'x'; ACRE_MAX_MESSAGE_BYTES];
+            let mut queued = 0;
+            let mut blocked = false;
+            for _ in 0..64 {
+                match server.from_arma.write(&payload) {
+                    Ok(()) => queued += 1,
+                    Err(AcrePipeError::WouldBlock { .. }) => {
+                        blocked = true;
+                        break;
+                    }
+                    error => panic!("unexpected full-pipe result: {error:?}"),
+                }
+            }
+            assert!(blocked, "test did not fill the message pipe");
+            let mut bytes = [0_u8; ACRE_MAX_MESSAGE_BYTES];
+            for _ in 0..queued {
+                assert_ne!(
+                    unsafe {
+                        ReadFile(
+                            reader.0,
+                            bytes.as_mut_ptr(),
+                            bytes.len() as u32,
+                            &raw mut read,
+                            ptr::null_mut(),
+                        )
+                    },
+                    0
+                );
+                assert_eq!(read as usize, payload.len());
+                assert_eq!(bytes, payload);
+            }
+            server.write_to_arma(&reply).unwrap();
+            assert_ne!(
+                unsafe {
+                    ReadFile(
+                        reader.0,
+                        bytes.as_mut_ptr(),
+                        bytes.len() as u32,
+                        &raw mut read,
                         ptr::null_mut(),
                     )
                 },

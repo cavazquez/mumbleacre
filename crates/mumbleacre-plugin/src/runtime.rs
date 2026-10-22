@@ -111,6 +111,7 @@ struct Runtime {
     mic: bool,
     sound_system_override: bool,
     locally_muted: bool,
+    local_mutes: crate::local_mutes::LocalMuteOverrides,
 }
 pub fn enqueue(input: Input) {
     let mut queue = INPUT
@@ -181,6 +182,7 @@ pub fn start() -> Result<(), String> {
         mic: false,
         sound_system_override: false,
         locally_muted: false,
+        local_mutes: Default::default(),
     });
     drop(runtime);
     ffi::log(
@@ -228,6 +230,7 @@ impl Runtime {
     }
 
     fn reset(&mut self) {
+        self.restore_local_mutes(true);
         crate::capture::close();
         let actions = self.ptt.reset();
         self.ptt_actions(actions);
@@ -261,6 +264,34 @@ impl Runtime {
 
     fn voice_is_suppressed(&self) -> bool {
         self.sound_system_override || self.locally_muted
+    }
+
+    fn restore_local_mutes(&mut self, report_failure: bool) {
+        if self.local_mutes.is_empty() {
+            return;
+        }
+        let current = ffi::context();
+        let Some(context) = self.context.as_ref().filter(|previous| {
+            current.as_ref().is_some_and(|current| {
+                ChannelMoveIdentity::from(*previous) == ChannelMoveIdentity::from(current)
+            })
+        }) else {
+            // Mumble session IDs must never be reused on a different endpoint.
+            self.local_mutes.clear();
+            return;
+        };
+        let pending = self.local_mutes.restore(
+            |user| ffi::is_user_locally_muted(context, user),
+            |user, muted| ffi::request_local_mute(context, user, muted),
+        );
+        if pending > 0 && report_failure {
+            crate::write_event(
+                Some(&self.log),
+                LogLevel::Warn,
+                "mumble_mute_restore_pending",
+                &format!("users={pending}"),
+            );
+        }
     }
 
     fn update_audio_rendering_gate(&mut self) {
@@ -615,7 +646,12 @@ impl Runtime {
                     muted,
                 } => {
                     if let Some(context) = self.context.as_ref() {
-                        let _ = ffi::request_local_mute(context, voice_client_id, muted);
+                        self.local_mutes.apply(
+                            voice_client_id,
+                            muted,
+                            ffi::is_user_locally_muted(context, voice_client_id),
+                            |muted| ffi::request_local_mute(context, voice_client_id, muted),
+                        );
                     }
                 }
                 AcreAdapterEvent::SoundPlaybackReady {
@@ -643,6 +679,9 @@ impl Runtime {
         // Any pipe loss, Mumble context loss, or reset fails open to Mumble's
         // unmodified source audio instead of muting the user's conversation.
         self.update_audio_rendering_gate();
+        if !self.connected {
+            self.restore_local_mutes(false);
+        }
         let inputs = std::mem::take(
             &mut *INPUT
                 .lock()

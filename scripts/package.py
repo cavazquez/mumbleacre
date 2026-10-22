@@ -2,14 +2,9 @@
 from pathlib import Path
 import hashlib
 import shutil
+import tempfile
 import tomllib
 import zipfile
-
-root = Path(__file__).resolve().parent.parent
-out = root / "dist/windows-x64"
-version = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-release_name = f"MumbleACRE-{version}-windows-x64"
-release_archive = out / f"{release_name}.zip"
 
 
 def write_deterministic_zip(archive: Path, entries: list[tuple[str, bytes]]) -> None:
@@ -28,72 +23,83 @@ def write_deterministic_zip(archive: Path, entries: list[tuple[str, bytes]]) -> 
             bundle.writestr(info, data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
 
 
-def relative_files(directory: Path) -> list[Path]:
-    return sorted(path.relative_to(out) for path in directory.rglob("*") if path.is_file())
-
-
 def require_file(path: Path) -> None:
     if not path.is_file():
         raise SystemExit(f"Missing required build artifact: {path}")
 
 
-out.mkdir(parents=True, exist_ok=True)
-plugin_dll = out / "mumbleacre_plugin.dll"
-addon_pbo = out / "@mumbleacre/addons/mumbleacre_acre.pbo"
-require_file(plugin_dll)
-require_file(addon_pbo)
-manifest = f'''<?xml version="1.0" encoding="UTF-8"?>
+def package(root: Path, out: Path | None = None) -> Path:
+    """Build from a fresh staging directory, never from leftover release files."""
+    if out is None:
+        out = root / "dist/windows-x64"
+    version = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))[
+        "workspace"
+    ]["package"]["version"]
+    release_name = f"MumbleACRE-{version}-windows-x64"
+    inputs = [
+        (out / "mumbleacre_plugin.dll", Path("mumbleacre_plugin.dll")),
+        (out / "@mumbleacre/addons/mumbleacre_acre.pbo", Path("@mumbleacre/addons/mumbleacre_acre.pbo")),
+        (root / "mod.cpp", Path("@mumbleacre/mod.cpp")),
+    ]
+    inputs.extend((root / name, Path(name)) for name in ("README.md", "LICENSE", "NOTICE.md"))
+    inputs.extend(
+        (root / "scripts" / name, Path(name))
+        for name in ("start-mumble.ps1", "diagnose-mumbleacre.ps1")
+    )
+    inputs.extend(
+        (root / "docs" / name, Path("docs") / name)
+        for name in ("runtime.md", "qa.md", "acre-mission-integration.md", "distribution.md")
+    )
+    mission = root / "missions/mumbleacre_smoke.VR"
+    require_file(mission / "mission.sqm")
+    inputs.extend((path, path.relative_to(root)) for path in mission.rglob("*") if path.is_file())
+    for source, _ in inputs:
+        require_file(source)
+
+    out.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".mumbleacre-", dir=out.parent) as directory:
+        staging = Path(directory)
+        release_files = []
+        for source, relative in inputs:
+            destination = staging / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+            release_files.append(relative)
+        manifest = f'''<?xml version="1.0" encoding="UTF-8"?>
 <bundle version="1.0.0">
   <assets><plugin os="windows" arch="x64">mumbleacre_plugin.dll</plugin></assets>
   <name>MumbleACRE</name><version>{version}</version>
 </bundle>
 '''
-bundle_path = out / "MumbleACRE.mumble_plugin"
-write_deterministic_zip(
-    bundle_path,
-    [
-        ("manifest.xml", manifest.encode()),
-        ("mumbleacre_plugin.dll", plugin_dll.read_bytes()),
-    ],
-)
-for name in ("README.md", "LICENSE", "NOTICE.md"):
-    shutil.copy2(root / name, out / name)
-for name in ("start-mumble.ps1", "diagnose-mumbleacre.ps1"):
-    shutil.copy2(root / "scripts" / name, out / name)
-(out / "docs").mkdir(exist_ok=True)
-for name in ("runtime.md", "qa.md", "acre-mission-integration.md", "distribution.md"):
-    shutil.copy2(root / "docs" / name, out / "docs" / name)
-shutil.copytree(root / "missions/mumbleacre_smoke.VR", out / "missions/mumbleacre_smoke.VR", dirs_exist_ok=True)
-release_files = [
-    Path("@mumbleacre/addons/mumbleacre_acre.pbo"),
-    Path("@mumbleacre/mod.cpp"),
-    Path("LICENSE"),
-    Path("MumbleACRE.mumble_plugin"),
-    Path("NOTICE.md"),
-    Path("README.md"),
-    Path("diagnose-mumbleacre.ps1"),
-    Path("mumbleacre_plugin.dll"),
-    Path("start-mumble.ps1"),
-    Path("docs/acre-mission-integration.md"),
-    Path("docs/distribution.md"),
-    Path("docs/qa.md"),
-    Path("docs/runtime.md"),
-]
-release_files.extend(relative_files(out / "missions/mumbleacre_smoke.VR"))
-release_files = sorted(release_files)
-hashes = "".join(
-    f"{hashlib.sha256((out / path).read_bytes()).hexdigest()}  {path.as_posix()}\n"
-    for path in release_files
-)
-hashes_path = out / "SHA256SUMS"
-hashes_path.write_text(hashes, encoding="utf-8", newline="\n")
-release_files.append(Path("SHA256SUMS"))
-write_deterministic_zip(
-    release_archive,
-    [
-        (f"{release_name}/{path.as_posix()}", (out / path).read_bytes())
-        for path in release_files
-    ],
-)
-print(f"Paquete preparado: {out / 'MumbleACRE.mumble_plugin'}")
-print(f"Release preparada: {release_archive}")
+        write_deterministic_zip(
+            staging / "MumbleACRE.mumble_plugin",
+            [("manifest.xml", manifest.encode("utf-8")),
+             ("mumbleacre_plugin.dll", (staging / "mumbleacre_plugin.dll").read_bytes())],
+        )
+        release_files.append(Path("MumbleACRE.mumble_plugin"))
+        release_files.sort(key=lambda path: path.as_posix())
+        hashes = "".join(
+            f"{hashlib.sha256((staging / path).read_bytes()).hexdigest()}  {path.as_posix()}\n"
+            for path in release_files
+        )
+        (staging / "SHA256SUMS").write_text(hashes, encoding="utf-8", newline="\n")
+        release_files.append(Path("SHA256SUMS"))
+        archive = staging / f"{release_name}.zip"
+        write_deterministic_zip(
+            archive,
+            [(f"{release_name}/{path.as_posix()}", (staging / path).read_bytes())
+             for path in release_files],
+        )
+        for relative in release_files:
+            destination = out / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(staging / relative, destination)
+        release_archive = archive.replace(out / archive.name)
+    return release_archive
+
+
+if __name__ == "__main__":
+    root = Path(__file__).resolve().parent.parent
+    archive = package(root)
+    print(f"Paquete preparado: {archive.parent / 'MumbleACRE.mumble_plugin'}")
+    print(f"Release preparada: {archive}")

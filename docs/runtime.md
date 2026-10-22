@@ -16,6 +16,11 @@ el timer y espera esos workers, que no dependen del hilo principal para salir.
 Las colas tienen capacidad fija. Una saturación de eventos/acciones fuerza
 reset en lugar de conservar un PTT cuyo STOP se pudo perder.
 
+Una escritura no bloqueante de Windows puede indicar éxito y cero bytes
+cuando se llena el buffer de un pipe de mensajes. Ese resultado conserva el
+RPC en la cola y se reintenta en el siguiente ciclo; sólo una escritura completa
+retira el mensaje. Un pipe cerrado se trata como desconexión.
+
 `MumbleACRE:STATE:1` envía un JSON de hasta 1024 bytes: header de versión,
 misión, generación y secuencia, versión ACRE, netId y transmisión activa o null.
 Cada mensaje es completo: no depende de recibir un HELLO/START anterior. Se
@@ -47,8 +52,10 @@ Los mensajes de control no están vinculados criptográficamente a cada paquete
 Opus; no se afirma ausencia absoluta de carreras entre control y voz bajo
 latencias arbitrarias. La prueba de transición directo/radio es obligatoria.
 
-La entrada PCM16 también tiene un permiso de 250 ms renovado sólo después de
-un envío de estado exitoso. Si se pierde control, deja de enviar voz útil.
+Durante una sesión ACRE activa, la entrada PCM16 también tiene un permiso de
+250 ms renovado sólo después de un envío de estado exitoso. Si se pierde
+control, deja de enviar voz útil. Sin ACRE o sin contexto Mumble, el micrófono
+permanece intacto. Desactivar y reactivar ACRE invalida el permiso anterior.
 El callback de entrada informa voz nativa mediante atómicos y distingue el
 micrófono forzado de ACRE; esto permite volver a PTT/VAD sin depender sólo de
 un callback de cambio de habla. El inicio puede recortarse: no hay pre-roll de
@@ -58,8 +65,14 @@ límite del servidor y las mediciones de QA siguen siendo requisitos.
 Los RPC `setSoundSystemMasterOverride` y `localMute` pasan por el control del
 hilo principal: el primero silencia el render de voz de ACRE y el segundo
 desactiva el micrófono local. `setMuted` solicita el mute local de Mumble para
-el usuario indicado. Ninguna de esas operaciones se ejecuta desde el worker de
-pipes ni el callback de audio.
+el usuario indicado. El control registra el estado previo antes de modificarlo
+y no elimina un silencio manual al recibir un unmute de ACRE. Al resetear,
+perder el pipe o deshabilitar el plugin, restaura sus propios cambios mientras
+la misma conexión Mumble siga disponible. Si detecta un cambio manual posterior,
+lo conserva; una restauración fallida se reintenta cuando ACRE está desconectado.
+Nunca aplica esos estados a IDs de usuario de otra conexión o servidor.
+Ninguna de esas operaciones se ejecuta desde el worker de pipes ni el callback
+de audio.
 
 El filtro ACRE sólo se activa cuando el pipe está conectado y existe un
 contexto Mumble sincronizado. Antes de eso —o ante pérdida del pipe, del

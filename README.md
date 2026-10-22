@@ -4,6 +4,10 @@ La versión de distribución se toma de `Cargo.toml`. Cada corrección entregada
 incrementa el último dígito de la versión, para que Mumble pueda identificar la
 actualización al reinstalar el plugin.
 
+La versión `0.1.13` corrige el micrófono fuera de ACRE, el reintento de mensajes
+cuando se llena el pipe, la restauración de silencios por usuario y la inclusión
+de archivos antiguos en el ZIP de distribución.
+
 Backend no oficial de **ACRE2 para Mumble en Arma 3**, Windows x64.
 ACRE controla radios, teclas, alcance, intercom e interfaces; Mumble transporta
 la voz. No necesita TFAR, un bridge ni una extensión Arma propia.
@@ -60,9 +64,11 @@ con dos clientes Windows y Arma.
    sólo agrega presets de misión y es opcional para misiones ACRE existentes.
 
 La voz directa usa el PTT/VAD de Mumble; radio e intercom usan las teclas de
-ACRE. Fuera de una sesión ACRE conectada, el plugin deja pasar el audio normal
-de Mumble; deshabilitarlo sólo evita el cambio automático a `ACRE` al iniciar
-Arma. No usar whisper/shout ni canales enlazados para la partida. Un usuario
+ACRE. Fuera de una sesión ACRE conectada, el plugin deja pasar tanto el
+micrófono como el audio recibido de Mumble. Al cerrar Arma o deshabilitar el
+plugin, restaura los silencios por usuario que aplicó ACRE si la conexión Mumble
+sigue disponible, conservando los silencios manuales. No usar whisper/shout ni
+canales enlazados para la partida. Un usuario
 sin plugin en el canal puede oír la voz transportada sin los filtros ACRE;
 el canal debe excluir esos clientes. Esto no es cifrado de redes de radio.
 El nombre visible en Mumble sigue siendo el configurado por el usuario: la API
@@ -107,11 +113,15 @@ pipes ACRE.
 El bundle usa el [formato nativo de Mumble](https://github.com/mumble-voip/mumble/blob/master/docs/dev/plugins/Bundling.md).
 
 Para la estructura del ZIP, verificación de hashes y reproducibilidad, ver
-[Distribución](docs/distribution.md).
+[Distribución](docs/distribution.md). El ZIP se prepara en una carpeta temporal
+nueva: los archivos sobrantes de una distribución anterior no se incluyen.
 
 `check.sh` ejecuta formato, Clippy, pruebas Rust, contratos SQF y compilación
 Windows. SQF-VM se descarga con hash fijado; se puede pasar `SQFVM_BIN` para
 usar una copia local. CI también ejecuta las pruebas nativas Windows.
+Las pruebas de empaquetado Python se ejecutan en ambas plataformas y verifican
+archivos eliminados, hashes y repetibilidad del ZIP. Los tests de pipes usan
+nombres de prueba independientes para poder ejecutarse con Mumble abierto.
 
 Diagnóstico del pipe: `%LOCALAPPDATA%\MumbleACRE\logs\plugin.log`, con rotación.
 El chat/log Mumble informa arranque, conexión ACRE, solicitud de canal, cambio

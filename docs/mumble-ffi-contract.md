@@ -16,4 +16,7 @@ hilo principal. Véase la [API oficial](https://github.com/mumble-voip/mumble/bl
 
 La entrada PCM16 publica la detección de habla sin mutex. La salida PCM float
 sólo modifica fuentes speech; notificaciones y música quedan intactas.
+Ambos callbacks dejan el PCM intacto fuera de una sesión ACRE activa. Los
+silencios por usuario consultan primero `isUserLocallyMuted` y conservan el
+estado previo para restaurarlo en el mismo servidor y sesión Mumble.
 `playSample` API 1.0 no lleva posición: sólo se aceptan sonidos locales centrados.
